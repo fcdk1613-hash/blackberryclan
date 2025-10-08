@@ -34,7 +34,7 @@ from apscheduler.triggers.cron import CronTrigger
 import pytz
 
 # --------------------------- CONFIG ---------------------------
-BOT_TOKEN = "REPLACE_WITH_YOUR_BOT_TOKEN"
+BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"
 ADMIN_IDS: List[int] = [123456789]
 MODERATOR_IDS: List[int] = []
 CHANNEL_USERNAMES = ["@blackberry_diary", "@blackberry_info", "@blackberry_news"]
