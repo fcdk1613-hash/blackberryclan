@@ -1,5 +1,4 @@
-"""
-Aiogram 3.x Telegram bot for clan 'Blackberry' (updated)
+"""\nAiogram 3.x Telegram bot for clan 'Blackberry' (updated)
 Изменения в этой версии:
 - Добавлены поля `name` и `age` при регистрации
 - Регистрация: сбор номера (через кнопку), имени (текст), возраста (через кнопки выбора или ручной ввод), ника, Discord, SteamID, часового пояса
@@ -13,8 +12,7 @@ Aiogram 3.x Telegram bot for clan 'Blackberry' (updated)
 
 Запуск: python blackberry_bot.py
 Зависимости: aiogram aiosqlite APScheduler pytz
-"""
-
+"""\n
 import asyncio
 import logging
 import aiosqlite
@@ -34,14 +32,11 @@ from apscheduler.triggers.cron import CronTrigger
 import pytz
 
 # --------------------------- CONFIG ---------------------------
-BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"
-ADMIN_IDS: List[int] = [123456789]
+BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"\nADMIN_IDS: List[int] = [123456789]
 MODERATOR_IDS: List[int] = []
 CHANNEL_USERNAMES = ["@blackberry_diary", "@blackberry_info", "@blackberry_news"]
-CLAN_CHAT_INVITE_LINK = "https://t.me/+example_invite_link"
-CLAN_CHAT_ID: Optional[int] = None
-DB_PATH = "blackberry_bot.db"
-MSK_TZ = pytz.timezone("Europe/Moscow")
+CLAN_CHAT_INVITE_LINK = "https://t.me/+example_invite_link"\nCLAN_CHAT_ID: Optional[int] = None
+DB_PATH = "blackberry_bot.db"\nMSK_TZ = pytz.timezone("Europe/Moscow")
 # --------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO)
@@ -71,8 +66,7 @@ class ModeratorFlow(StatesGroup):
 # --------------------------- DB helpers ------------------------
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS members (
+        await db.execute("""\n        CREATE TABLE IF NOT EXISTS members (
             tg_id INTEGER PRIMARY KEY,
             phone TEXT,
             name TEXT,
@@ -87,8 +81,7 @@ async def init_db():
             join_date TEXT
         )
         """)
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS approvals (
+        await db.execute("""\n        CREATE TABLE IF NOT EXISTS approvals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tg_id INTEGER,
             requested_at TEXT,
@@ -97,8 +90,7 @@ async def init_db():
             comment TEXT
         )
         """)
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS attendance (
+        await db.execute("""\n        CREATE TABLE IF NOT EXISTS attendance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tg_id INTEGER,
             date TEXT,
@@ -118,8 +110,7 @@ async def init_db():
 
 async def save_member(tg_id: int, phone: str, name: str, age: Optional[int], nick: str, discord: str, steamid: str, timezone: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO members (tg_id, phone, name, age, nick, discord, steamid, timezone, factions, roles, join_date)
+        await db.execute("""\n            INSERT OR REPLACE INTO members (tg_id, phone, name, age, nick, discord, steamid, timezone, factions, roles, join_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (tg_id, phone, name, age, nick, discord, steamid, timezone, '', '', None))
         await db.commit()
@@ -320,12 +311,10 @@ async def timezone_received(message: types.Message, state: FSMContext):
     await save_member(tg_id, phone, name, age, nick, discord, steamid, tz)
 
     # Send links to publics and buttons to recheck subscription
-    text = "Спасибо! Чтобы завершить регистрацию, пожалуйста подпишитесь на наши паблики: 
-"
-    for ch in CHANNEL_USERNAMES:
-        text += f"{ch}
-"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    text = """Спасибо! Чтобы завершить регистрацию, пожалуйста подпишитесь на наши паблики: 
+"""\n    for ch in CHANNEL_USERNAMES:
+        text += f"""{ch}
+"""\n    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить подписку", callback_data=f"checksub:{tg_id}"), InlineKeyboardButton(text="Отправить заявку на проверку", callback_data=f"request_review:{tg_id}")]
     ])
     await message.answer(text, reply_markup=kb)
@@ -371,10 +360,9 @@ async def notify_reviewers_of_request(tg_id:int, nick:str, subs_ok:bool):
     inline = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Одобрить", callback_data=f"approve:{tg_id}"), InlineKeyboardButton(text="Отклонить", callback_data=f"reject:{tg_id}")]
     ])
-    text = f"Новая заявка: {nick} (ID {tg_id})
+    text = f"""Новая заявка: {nick} (ID {tg_id})
 Подписки в порядке: {subs_ok}
-Нажмите кнопку для одобрения/отклонения."
-    recipients = set(ADMIN_IDS + MODERATOR_IDS)
+Нажмите кнопку для одобрения/отклонения."""\n    recipients = set(ADMIN_IDS + MODERATOR_IDS)
     for r in recipients:
         try:
             await bot.send_message(r, text, reply_markup=inline)
@@ -394,8 +382,7 @@ async def cb_approve(callback: types.CallbackQuery):
         await bot.send_message(tg_id, f"Ваша заявка одобрена! Ссылка на чат: {CLAN_CHAT_INVITE_LINK}")
     except Exception as e:
         logger.warning(f"Could not send invite to {tg_id}: {e}")
-    await callback.message.edit_text(callback.message.text + f"
-Одобрено модератором {user.full_name}")
+    await callback.message.edit_text(callback.message.text + f"""\nОдобрено модератором {user.full_name}""")
     await callback.answer("Заявка одобрена.")
 
 @dp.callback_query(Text(startswith="reject:"))
@@ -407,8 +394,7 @@ async def cb_reject(callback: types.CallbackQuery):
     tg_id = int(callback.data.split(':',1)[1])
     await set_approval_status(tg_id, 'rejected', user.id)
     await bot.send_message(tg_id, "К сожалению, ваша заявка отклонена. Для уточнений свяжитесь с администрацией.")
-    await callback.message.edit_text(callback.message.text + f"
-Отклонено модератором {user.full_name}")
+    await callback.message.edit_text(callback.message.text + f"""\nОтклонено модератором {user.full_name}""")
     await callback.answer("Заявка отклонена.")
 
 # Detect when member joins the clan chat and announce
@@ -475,8 +461,7 @@ async def cb_list_members(callback: types.CallbackQuery):
     # build inline keyboard with small pages (here simply list up to 50)
     kb_lines = []
     for r in rows:
-        label = f"{r['nick'] or 'без ника'} ({r['tg_id']})"
-        kb_lines.append([InlineKeyboardButton(text=label, callback_data=f"view_member:{r['tg_id']}")])
+        label = f"{r['nick'] or 'без ника'} ({r['tg_id']})"\n        kb_lines.append([InlineKeyboardButton(text=label, callback_data=f"view_member:{r['tg_id']}")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_lines)
     await callback.message.answer("Список участников (нажмите для просмотра):", reply_markup=kb)
     await callback.answer()
@@ -491,7 +476,7 @@ async def cb_view_member(callback: types.CallbackQuery):
     if not member:
         await callback.answer("Участник не найден.", show_alert=True)
         return
-    text = f"Информация об участнике:
+    text = f"""Информация об участнике:
 ID: {member.get('tg_id')}
 Имя: {member.get('name')}
 Возраст: {member.get('age')}
@@ -502,8 +487,7 @@ SteamID: {member.get('steamid')}
 Фракции: {member.get('factions')}
 Должности: {member.get('roles')}
 Резерв: {member.get('is_reserve')}
-Дата вступления: {member.get('join_date')}"
-    # action buttons
+Дата вступления: {member.get('join_date')}"""\n    # action buttons
     actions = []
     actions.append(InlineKeyboardButton(text="Добавить фракцию", callback_data=f"add_faction_to:{tg_id}"))
     actions.append(InlineKeyboardButton(text="Добавить подразделение", callback_data=f"add_division_to:{tg_id}"))
@@ -617,12 +601,10 @@ async def cmd_list_members(message: types.Message):
     if not rows:
         await message.reply("Нет зарегистрированных участников.")
         return
-    text = "Список участников:
-"
-    for r in rows:
-        text += f"ID: {r['tg_id']} — {r['nick']} — фракции:{r['factions']} — должности:{r['roles']} — резерв:{r['is_reserve']} — joined:{r['join_date']}
-"
-    await message.reply(text)
+    text = """Список участников:
+"""\n    for r in rows:
+        text += f"""ID: {r['tg_id']} — {r['nick']} — фракции:{r['factions']} — должности:{r['roles']} — резерв:{r['is_reserve']} — joined:{r['join_date']}
+"""\n    await message.reply(text)
 
 # --------------------------- Attendance survey ----------------------
 async def send_daily_survey():
@@ -630,8 +612,7 @@ async def send_daily_survey():
     rows = await list_members()
     for r in rows:
         tg_id = r['tg_id']
-        text = "Будешь ли ты сегодня на тренировке?"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
+        text = "Будешь ли ты сегодня на тренировке?"\n        kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Да", callback_data=f"att:{date.today().isoformat()}:yes")],
             [InlineKeyboardButton(text="Нет", callback_data=f"att:{date.today().isoformat()}:no")],
             [InlineKeyboardButton(text="Опоздаю", callback_data=f"att:{date.today().isoformat()}:late")]
@@ -670,19 +651,16 @@ async def send_daily_stats():
     no = summary.get('no', 0)
     late = summary.get('late', 0)
     unanswered = await unanswered_members_for_date(the_date)
-    text = f"Статистика по тренировке за {the_date.isoformat()}:
+    text = f"""Статистика по тренировке за {the_date.isoformat()}:
 Придут: {yes}
 Не придут: {no}
 Опоздают: {late}
 Не ответили: {len(unanswered)}
-"
-    if unanswered:
-        text += "Список неответивших:
-"
-        for u in unanswered:
-            text += f"{u['nick']} — ID:{u['tg_id']}
-"
-    for admin in ADMIN_IDS:
+"""\n    if unanswered:
+        text += """Список неответивших:
+"""\n        for u in unanswered:
+            text += f"""{u['nick']} — ID:{u['tg_id']}
+"""\n    for admin in ADMIN_IDS:
         try:
             await bot.send_message(admin, text)
         except Exception as e:
@@ -692,12 +670,10 @@ async def check_three_day_nonanswers():
     arr = await consecutive_nonanswers(3)
     if not arr:
         return
-    text = "Внимание: следующие пользователи не отвечали на опросы в течение 3-х дней:
-"
-    for u in arr:
-        text += f"{u['nick']} — ID:{u['tg_id']}
-"
-    recipients = set(ADMIN_IDS + MODERATOR_IDS)
+    text = """Внимание: следующие пользователи не отвечали на опросы в течение 3-х дней:
+"""\n    for u in arr:
+        text += f"""{u['nick']} — ID:{u['tg_id']}
+"""\n    recipients = set(ADMIN_IDS + MODERATOR_IDS)
     for r in recipients:
         try:
             await bot.send_message(r, text)
