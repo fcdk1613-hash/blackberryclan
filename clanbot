@@ -1,7 +1,8 @@
 # main.py
 # aiogram 3.x bot for Blackberry clan onboarding
-# Adds: internal auto-increment ClanID per player (clan_id), shown in profiles, applications, CSV.
-# Keeps: personal DM review flow, profile-first faction selection, DOB-based age, stats, CSV exports.
+# Adds: internal ClanID, DM review, factions, DOB. Reports/CSV.
+# Removal checklist updated: items 1 (DB) and 3 (Discord) are MANUAL via "Выполнено".
+# Only item 2 (remove from Telegram clan chat) is automatic.
 import asyncio
 import logging
 from datetime import datetime, timedelta, date
@@ -27,12 +28,12 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ======= CONFIG =======
-BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
+BOT_TOKEN = ""                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = 0                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696}                  # {111, 222}
+ADMIN_IDS = set()                  # {111, 222}
 MODERATOR_IDS = set()              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -43,8 +44,8 @@ if not BOT_TOKEN:
 # ======= DB LAYER =======
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,          -- Telegram user id
-    clan_id INTEGER,                      -- internal incremental id (added via migration & code-managed)
+    user_id INTEGER PRIMARY KEY,
+    clan_id INTEGER,
     phone TEXT,
     nickname TEXT,
     discord TEXT,
@@ -61,6 +62,21 @@ CREATE TABLE IF NOT EXISTS users (
     joined_at TEXT
 );
 """
+CREATE_USERS_ARCHIVE_SQL = """
+CREATE TABLE IF NOT EXISTS users_archive AS
+SELECT user_id, clan_id, phone, nickname, discord, steamid, age, birth_date, timezone, tg_link,
+       faction, status, created_at, applied_at, approved_at, joined_at,
+       '' AS archived_at
+FROM users WHERE 0;
+"""
+CREATE_REMOVE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS removal_checklist (
+    user_id INTEGER PRIMARY KEY,
+    db_done INTEGER DEFAULT 0,
+    tg_done INTEGER DEFAULT 0,
+    discord_done INTEGER DEFAULT 0
+);
+"""
 
 class Status(str, Enum):
     NEW = "new"
@@ -69,6 +85,7 @@ class Status(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     JOINED = "joined"
+    REMOVED = "removed"
 
 FACTIONS = {
     "cran": "Cranberry",
@@ -92,6 +109,8 @@ def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(CREATE_USERS_SQL)
+        await db.execute(CREATE_USERS_ARCHIVE_SQL)
+        await db.execute(CREATE_REMOVE_TABLE_SQL)
         # Migrations
         for alter in [
             "ALTER TABLE users ADD COLUMN applied_at TEXT",
@@ -103,16 +122,29 @@ async def init_db():
                 await db.execute(alter)
             except Exception:
                 pass
+        for alter in [
+            "ALTER TABLE users_archive ADD COLUMN archived_at TEXT",
+        ]:
+            try:
+                await db.execute(alter)
+            except Exception:
+                pass
+        for alter in [
+            "ALTER TABLE removal_checklist ADD COLUMN db_done INTEGER DEFAULT 0",
+            "ALTER TABLE removal_checklist ADD COLUMN tg_done INTEGER DEFAULT 0",
+            "ALTER TABLE removal_checklist ADD COLUMN discord_done INTEGER DEFAULT 0",
+        ]:
+            try:
+                await db.execute(alter)
+            except Exception:
+                pass
         await db.commit()
-    # Fill missing clan_id values with sequential numbers
     await ensure_clan_ids()
 
 async def ensure_clan_ids():
     async with aiosqlite.connect(DB_PATH) as db:
-        # get current max
         cur = await db.execute("SELECT COALESCE(MAX(clan_id), 0) FROM users")
         (max_clan_id,) = await cur.fetchone()
-        # find users without clan_id
         cur = await db.execute("SELECT user_id FROM users WHERE clan_id IS NULL ORDER BY rowid")
         rows = await cur.fetchall()
         next_id = max_clan_id + 1
@@ -138,7 +170,6 @@ async def upsert_user(user_id: int, **fields):
             vals = list(fields.values()) + [user_id]
             await db.execute(f"UPDATE users SET {cols} WHERE user_id=?", vals)
         else:
-            # assign new clan_id
             cid = await next_clan_id(db)
             keys = ["user_id", "clan_id", *fields.keys()]
             placeholders = ",".join(["?"] * len(keys))
@@ -218,6 +249,7 @@ def apply_kb() -> InlineKeyboardMarkup:
 def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎯 Выбрать фракцию", callback_data=f"profile_choosefac:{user_id}")
+    kb.button(text="🗑 Удалить игрока", callback_data=f"remove:init:{user_id}")
     kb.row()
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     return kb.as_markup()
@@ -315,6 +347,47 @@ async def create_invite_link() -> Optional[ChatInviteLink]:
     except Exception as e:
         logging.exception("Cannot create invite link: %r", e)
         return None
+
+# ======= Removal checklist (manual for items 1 and 3) =======
+async def ensure_removal_record(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO removal_checklist(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING", (user_id,))
+        await db.commit()
+
+def removal_kb(user_id: int, done_db: bool, done_tg: bool, done_discord: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text=("✅ 1. Проверено (таблица)" if done_db else "1. Выполнено (таблица)"), callback_data=f"remove:dbdone:{user_id}")
+    kb.button(text=("✅ 2. Удалён из клан-чата" if done_tg else "2. Удалить из клан-чата"), callback_data=f"remove:tg:{user_id}")
+    kb.row()
+    kb.button(text=("✅ 3. Проверено (Discord)" if done_discord else "3. Выполнено (Discord)"), callback_data=f"remove:discdone:{user_id}")
+    kb.row()
+    kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
+    return kb.as_markup()
+
+async def removal_state(user_id: int) -> tuple[bool, bool, bool]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT db_done, tg_done, discord_done FROM removal_checklist WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+    if row:
+        return bool(row[0]), bool(row[1]), bool(row[2])
+    return False, False, False
+
+def removal_text(user: Optional[dict], done_db: bool, done_tg: bool, done_discord: bool) -> str:
+    title = "<b>Удаление игрока — чек-лист</b>"
+    if user:
+        header = f"ClanID: <code>{pad_clan_id(user.get('clan_id'))}</code> | ID: <code>{user.get('user_id')}</code> | Ник: {user.get('nickname') or '-'}"
+    else:
+        header = f"ID: <code>{user}</code>"
+    def mark(b): return "✅" if b else "☐"
+    lines = [
+        title,
+        header,
+        "",
+        f"{mark(done_db)} 1) Проверить: игрок удалён из таблицы БД (отмечается вручную кнопкой «Выполнено (таблица)»).",
+        f"{mark(done_tg)} 2) Удалить из клан-чата Telegram (выполняет бот по кнопке).",
+        f"{mark(done_discord)} 3) Проверить: игрок удалён из Discord (отмечается вручную кнопкой «Выполнено (Discord)»).",
+    ]
+    return "\n".join(lines)
 
 # ======= HANDLERS =======
 @dp.message(CommandStart())
@@ -450,7 +523,7 @@ async def on_send_apply(call: CallbackQuery):
         return
 
     await upsert_user(uid, applied_at=datetime.utcnow().isoformat())
-    user = await get_user(uid)  # refresh to get clan_id
+    user = await get_user(uid)
     clan_id = pad_clan_id(user.get("clan_id"))
 
     text = (
@@ -577,6 +650,88 @@ async def on_profile_set_faction(call: CallbackQuery):
     except Exception:
         pass
     await call.answer(f"Фракция установлена: {title}")
+
+# ======= Removal flow (manual items 1 & 3) =======
+@dp.callback_query(F.data.startswith("remove:init:"))
+async def on_remove_init(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid_str = call.data.split(":")
+    target_id = int(uid_str)
+    await ensure_removal_record(target_id)
+    user = await get_user(target_id)
+    done_db, done_tg, done_disc = await removal_state(target_id)
+    text = removal_text(user, done_db, done_tg, done_disc)
+    try:
+        await call.message.edit_text(text, reply_markup=removal_kb(target_id, done_db, done_tg, done_disc))
+    except Exception:
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("remove:dbdone:"))
+async def on_remove_dbdone(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid_str = call.data.split(":")
+    target_id = int(uid_str)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO removal_checklist(user_id, db_done) VALUES(?,1) ON CONFLICT(user_id) DO UPDATE SET db_done=1", (target_id,))
+        await db.commit()
+    user = await get_user(target_id)
+    done_db, done_tg, done_disc = await removal_state(target_id)
+    text = removal_text(user, done_db, done_tg, done_disc)
+    try:
+        await call.message.edit_text(text, reply_markup=removal_kb(target_id, done_db, done_tg, done_disc))
+    except Exception:
+        pass
+    await call.answer("Отмечено как выполнено (таблица).")
+
+@dp.callback_query(F.data.startswith("remove:tg:"))
+async def on_remove_tg(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid_str = call.data.split(":")
+    target_id = int(uid_str)
+    try:
+        await bot.ban_chat_member(CLAN_CHAT_ID, target_id)
+        await bot.unban_chat_member(CLAN_CHAT_ID, target_id)
+        ok = True
+    except Exception as e:
+        logging.warning("Failed to remove from chat: %r", e)
+        ok = False
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO removal_checklist(user_id, tg_done) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET tg_done=?", (target_id, 1 if ok else 0, 1 if ok else 0))
+        await db.commit()
+    user = await get_user(target_id)
+    done_db, done_tg, done_disc = await removal_state(target_id)
+    text = removal_text(user, done_db, done_tg, done_disc)
+    try:
+        await call.message.edit_text(text, reply_markup=removal_kb(target_id, done_db, done_tg, done_disc))
+    except Exception:
+        pass
+    await call.answer("Удалён из клан-чата." if ok else "Не удалось удалить из клан-чата.")
+
+@dp.callback_query(F.data.startswith("remove:discdone:"))
+async def on_remove_discdone(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid_str = call.data.split(":")
+    target_id = int(uid_str)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO removal_checklist(user_id, discord_done) VALUES(?,1) ON CONFLICT(user_id) DO UPDATE SET discord_done=1", (target_id,))
+        await db.commit()
+    user = await get_user(target_id)
+    done_db, done_tg, done_disc = await removal_state(target_id)
+    text = removal_text(user, done_db, done_tg, done_disc)
+    try:
+        await call.message.edit_text(text, reply_markup=removal_kb(target_id, done_db, done_tg, done_disc))
+    except Exception:
+        pass
+    await call.answer("Отмечено как выполнено (Discord).")
 
 # ======= Approve/Reject (DM) =======
 @dp.callback_query(F.data.startswith("approve:"))
@@ -706,7 +861,7 @@ async def cmd_help(message: Message):
         """Команды:
 /start — регистрация
 /profile — ваш профиль
-/player <user_id | @username | часть ника> — профиль игрока (для модераторов, выбор фракции из профиля)
+/player <user_id | @username | часть ника> — профиль игрока (для модераторов, выбор фракции/удаление из профиля)
 /stats — агрегированные отчёты (для модераторов/админов)
 """
     )
