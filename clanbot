@@ -34,25 +34,23 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# ======= CONFIG (direct constants) =======
+# ⬇️ ВПИШИТЕ СВОИ ДАННЫЕ
+BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← токен бота от @BotFather (обязательно)
+CHANNEL_USERNAME = "@SquadBlackBerry"  # ← юзернейм вашего канала с новостями
+CLAN_CHAT_ID = 0                   # ← numeric ID супергруппы клана (например, -1001234567890123)
+MODERATION_CHAT_ID = 0             # ← numeric ID модераторского чата (куда прилетят заявки)
 
-# ======= CONFIG =======
-BOT_TOKEN = os.getenv("8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@SquadBlackBerry")  # public channel username
-CLAN_CHAT_ID = int(os.getenv("CLAN_CHAT_ID", "0"))  # numeric ID of the clan chat (supergroup)
-MODERATION_CHAT_ID = int(os.getenv("MODERATION_CHAT_ID", "0"))  # chat where moderators receive requests
+# Наборы ID модераторов/админов, которые могут одобрять/отклонять и смотреть отчёты
+ADMIN_IDS = set(403704696)                  # например: {111111111, 222222222}
+MODERATOR_IDS = set()              # например: {333333333}
 
-# Optional: per-user admin permissions (used for /start on moderators etc.)
-ADMIN_IDS = set(map(int, os.getenv("403704696").split())) if os.getenv("ADMIN_IDS") else set()
-MODERATOR_IDS = set(map(int, os.getenv("MODERATOR_IDS", "").split())) if os.getenv("MODERATOR_IDS") else set()
-
-DB_PATH = os.getenv("DB_PATH", "blackberry_bot.db")
+DB_PATH = "blackberry_bot.db"      # путь к SQLite базе
 
 # Safety checks
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in environment")
+    raise RuntimeError("BOT_TOKEN is not set in code (fill BOT_TOKEN at the top of main.py)")
 
 
 # ======= DB LAYER =======
@@ -191,6 +189,8 @@ async def create_invite_link() -> Optional[ChatInviteLink]:
 
 
 # ======= HANDLERS =======
+from aiogram.types import ReplyKeyboardRemove  # re-import safe in runtime (already imported above)
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     user = await get_user(message.from_user.id)
