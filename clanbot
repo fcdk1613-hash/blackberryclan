@@ -553,11 +553,18 @@ async def cmd_player(message: Message, command: Command):
         return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("Использование:
-" "<code>/player &lt;user_id&gt;</code> — по Telegram ID
-" "<code>/player @username</code> — по username
-" "<code>/player часть_ника</code> — по фрагменту ника
-" "<code>/player #&lt;ClanID&gt;</code> — по ClanID")
+        await message.answer(
+    "Использование:
+"
+    "<code>/player &lt;user_id&gt;</code> — по Telegram ID
+"
+    "<code>/player @username</code> — по username
+"
+    "<code>/player часть_ника</code> — по фрагменту ника
+"
+    "<code>/player #&lt;ClanID&gt;</code> — по ClanID"
+)
+
         return
     query = args[1].strip()
 
