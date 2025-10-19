@@ -4,10 +4,11 @@
 # 1) Registration via phone share button
 # 2) Sequential text prompts: nickname(real name), Discord, SteamID, age, timezone, personal TG link
 # 3) Channel subscription check for @SquadBlackBerry
-# 4) Submit application -> notify moderators with Approve/Reject buttons
+# 4) Submit application -> notify moderators with Approve/Reject buttons (in-bot)
 # 5) After approval -> send clan chat invite link
-# 6) After user joins clan chat -> announce to clan chat and store join date
+# 6) After user joins clan chat -> announce to clan chat and notify moderators; store join date
 # 7) SQLite storage
+# 8) Aggregated reports (/stats) + CSV exports
 
 import asyncio
 import logging
@@ -30,7 +31,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     CallbackQuery,
     ChatInviteLink,
-, FSInputFile)
+    FSInputFile,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types.chat import ChatType
 import os
@@ -39,13 +41,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ======= CONFIG =======
-BOT_TOKEN = os.getenv("8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY")
-CHANNEL_USERNAME = os.getenv("@SquadBlackBerry")  # public channel username
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@SquadBlackBerry")  # public channel username
 CLAN_CHAT_ID = int(os.getenv("CLAN_CHAT_ID", "0"))  # numeric ID of the clan chat (supergroup)
 MODERATION_CHAT_ID = int(os.getenv("MODERATION_CHAT_ID", "0"))  # chat where moderators receive requests
 
 # Optional: per-user admin permissions (used for /start on moderators etc.)
-ADMIN_IDS = set(map(int, os.getenv("403704696", "").split())) if os.getenv("ADMIN_IDS") else set()
+ADMIN_IDS = set(map(int, os.getenv("ADMIN_IDS", "").split())) if os.getenv("ADMIN_IDS") else set()
 MODERATOR_IDS = set(map(int, os.getenv("MODERATOR_IDS", "").split())) if os.getenv("MODERATOR_IDS") else set()
 
 DB_PATH = os.getenv("DB_PATH", "blackberry_bot.db")
@@ -148,18 +150,15 @@ def phone_kb() -> ReplyKeyboardMarkup:
         input_field_placeholder="Нажмите, чтобы поделиться номером",
     )
 
-
 def subscription_check_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🔔 Проверить подписку", callback_data="check_sub")
     return kb.as_markup()
 
-
 def apply_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📨 Отправить заявку", callback_data="send_apply")
     return kb.as_markup()
-
 
 def approve_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -215,7 +214,6 @@ async def cmd_start(message: Message, state: FSMContext):
     )
     await state.set_state(RegStates.waiting_phone)
 
-
 @dp.message(RegStates.waiting_phone, F.contact)
 async def got_phone(message: Message, state: FSMContext):
     phone = message.contact.phone_number
@@ -223,11 +221,9 @@ async def got_phone(message: Message, state: FSMContext):
     await message.answer("Отлично! Введите ник (реальное имя):", reply_markup=ReplyKeyboardRemove())
     await state.set_state(RegStates.waiting_nickname)
 
-
 @dp.message(RegStates.waiting_phone)
 async def need_phone(message: Message):
     await message.answer("Пожалуйста, нажмите кнопку и поделитесь номером телефона.", reply_markup=phone_kb())
-
 
 @dp.message(RegStates.waiting_nickname)
 async def got_nick(message: Message, state: FSMContext):
@@ -235,20 +231,17 @@ async def got_nick(message: Message, state: FSMContext):
     await message.answer("Введите Discord:")
     await state.set_state(RegStates.waiting_discord)
 
-
 @dp.message(RegStates.waiting_discord)
 async def got_discord(message: Message, state: FSMContext):
     await state.update_data(discord=message.text.strip())
     await message.answer("Введите SteamID:")
     await state.set_state(RegStates.waiting_steam)
 
-
 @dp.message(RegStates.waiting_steam)
 async def got_steam(message: Message, state: FSMContext):
     await state.update_data(steamid=message.text.strip())
     await message.answer("Введите возраст:")
     await state.set_state(RegStates.waiting_age)
-
 
 @dp.message(RegStates.waiting_age)
 async def got_age(message: Message, state: FSMContext):
@@ -260,13 +253,11 @@ async def got_age(message: Message, state: FSMContext):
     await message.answer("Введите часовой пояс (например, GMT+3 или Europe/Moscow):")
     await state.set_state(RegStates.waiting_tz)
 
-
 @dp.message(RegStates.waiting_tz)
 async def got_tz(message: Message, state: FSMContext):
     await state.update_data(timezone=message.text.strip())
     await message.answer("Введите ссылку на ваш личный Telegram (например, https://t.me/username):")
     await state.set_state(RegStates.waiting_tg_link)
-
 
 @dp.message(RegStates.waiting_tg_link)
 async def got_tg_link(message: Message, state: FSMContext):
@@ -332,22 +323,14 @@ async def on_send_apply(call: CallbackQuery):
     await upsert_user(uid, applied_at=datetime.utcnow().isoformat())
 
     text = (
-        f"<b>Новая заявка в клан</b>
-"
-        f"ID: <code>{uid}</code>
-"
-        f"Ник: {user.get('nickname')}
-"
-        f"Discord: {user.get('discord')}
-"
-        f"SteamID: {user.get('steamid')}
-"
-        f"Возраст: {user.get('age')}
-"
-        f"Часовой пояс: {user.get('timezone')}
-"
-        f"Личный TG: {user.get('tg_link')}
-"
+        f"<b>Новая заявка в клан</b>\n"
+        f"ID: <code>{uid}</code>\n"
+        f"Ник: {user.get('nickname')}\n"
+        f"Discord: {user.get('discord')}\n"
+        f"SteamID: {user.get('steamid')}\n"
+        f"Возраст: {user.get('age')}\n"
+        f"Часовой пояс: {user.get('timezone')}\n"
+        f"Личный TG: {user.get('tg_link')}\n"
     )
     await bot.send_message(
         MODERATION_CHAT_ID,
@@ -367,6 +350,7 @@ async def on_approve(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Только модераторы/администраторы могут одобрять заявки.", show_alert=True)
         return
+
     target_id = int(call.data.split(":")[1])
 
     user = await get_user(target_id)
@@ -388,7 +372,6 @@ async def on_approve(call: CallbackQuery):
 
     await call.message.edit_text(call.message.text + "\n\n✅ Одобрено")
 
-
 @dp.callback_query(F.data.startswith("reject:"))
 async def on_reject(call: CallbackQuery):
     if call.message.chat.id != MODERATION_CHAT_ID:
@@ -398,6 +381,7 @@ async def on_reject(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Только модераторы/администраторы могут отклонять заявки.", show_alert=True)
         return
+
     target_id = int(call.data.split(":")[1])
     await upsert_user(target_id, status=Status.REJECTED.value)
     await bot.send_message(target_id, "К сожалению, ваша заявка отклонена. Вы можете попробовать позже.")
@@ -412,13 +396,13 @@ async def cmd_profile(message: Message):
         await message.answer("Профиль не найден. Нажмите /start")
         return
     lines = ["<b>Ваш профиль</b>"]
-    for key in ("nickname", "discord", "steamid", "age", "timezone", "tg_link", "status", "created_at", "approved_at", "joined_at"):
+    for key in ("nickname", "discord", "steamid", "age", "timezone", "tg_link", "status", "created_at", "applied_at", "approved_at", "joined_at"):
         if user.get(key):
             lines.append(f"{key}: {user.get(key)}")
     await message.answer("\n".join(lines))
 
 
-# Announce when user joins clan chat
+# Announce when user joins clan chat AND notify moderators
 @dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
 async def on_user_joined_clan(message: Message):
     for member in message.new_chat_members:
@@ -438,26 +422,17 @@ async def on_user_joined_clan(message: Message):
 
             # Notify moderators automatically about the join event
             join_text = (
-                f"<b>Участник вступил в клан</b>
-"
-                f"ID: <code>{uid}</code>
-"
-                f"Ник: {nickname}
-"
-                f"Discord: {user.get('discord') or '-'}
-"
-                f"SteamID: {user.get('steamid') or '-'}
-"
-                f"Возраст: {user.get('age') or '-'}
-"
-                f"Часовой пояс: {user.get('timezone') or '-'}
-"
-                f"Личный TG: {user.get('tg_link') or '-'}
-"
+                f"<b>Участник вступил в клан</b>\n"
+                f"ID: <code>{uid}</code>\n"
+                f"Ник: {nickname}\n"
+                f"Discord: {user.get('discord') or '-'}\n"
+                f"SteamID: {user.get('steamid') or '-'}\n"
+                f"Возраст: {user.get('age') or '-'}\n"
+                f"Часовой пояс: {user.get('timezone') or '-'}\n"
+                f"Личный TG: {user.get('tg_link') or '-'}\n"
                 f"Дата вступления: {user.get('joined_at') or now_iso}"
             )
             await send_to_moderation(join_text)
-
 
 
 # Fallback for when the bot is added to the clan chat (ensure it can see join events)
@@ -477,6 +452,7 @@ async def cmd_help(message: Message):
 /start — начать регистрацию
 /profile — показать ваши данные
 /help — помощь
+/stats — агрегированные отчёты (для модераторов/админов)
 
 Шаги регистрации:
 1) Поделиться номером телефона
@@ -553,9 +529,7 @@ async def get_stats(start: Optional[datetime], end: Optional[datetime]) -> str:
         lines.append("Топ по часовым поясам (вступившие):")
         for tz, c in tz_rows:
             lines.append(f"• {tz}: {c}")
-    return "
-".join(lines)
-
+    return "\n".join(lines)
 
 def period_bounds(key: str):
     now = datetime.utcnow()
@@ -573,7 +547,6 @@ def period_bounds(key: str):
         end = None
     return start, end
 
-
 def stats_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="Сегодня", callback_data="stats:today")
@@ -584,14 +557,12 @@ def stats_kb() -> InlineKeyboardMarkup:
     kb.button(text="CSV (все за 30д)", callback_data="export:all:30d")
     return kb.as_markup()
 
-
 @dp.message(F.text == "/stats")
 async def cmd_stats(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
         return
     await message.answer("Выберите период для отчёта:", reply_markup=stats_kb())
-
 
 @dp.callback_query(F.data.startswith("stats:"))
 async def on_stats(call: CallbackQuery):
@@ -602,7 +573,6 @@ async def on_stats(call: CallbackQuery):
     start, end = period_bounds(key)
     text = await get_stats(start, end)
     await call.message.edit_text(text, reply_markup=stats_kb())
-
 
 async def export_csv(kind: str, start: Optional[datetime], end: Optional[datetime]) -> str:
     cond_col = {"joined": "joined_at", "all": "created_at"}[kind]
@@ -632,7 +602,6 @@ async def export_csv(kind: str, start: Optional[datetime], end: Optional[datetim
         writer.writerows(rows)
     return fname
 
-
 @dp.callback_query(F.data.startswith("export:"))
 async def on_export(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -654,7 +623,5 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Bot stopped.")
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
