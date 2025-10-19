@@ -18,6 +18,7 @@ from typing import Optional
 
 import aiosqlite
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -33,7 +34,6 @@ from aiogram.types import (
     FSInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import os
 
 # ======= CONFIG (direct constants) =======
 # ⬇️ ВПИШИТЕ СВОИ ДАННЫЕ
@@ -131,7 +131,7 @@ class RegStates(StatesGroup):
 
 # ======= BOT SETUP =======
 logging.basicConfig(level=logging.INFO)
-bot = Bot(BOT_TOKEN, parse_mode="HTML")
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
 
@@ -189,8 +189,6 @@ async def create_invite_link() -> Optional[ChatInviteLink]:
 
 
 # ======= HANDLERS =======
-from aiogram.types import ReplyKeyboardRemove  # re-import safe in runtime (already imported above)
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     user = await get_user(message.from_user.id)
