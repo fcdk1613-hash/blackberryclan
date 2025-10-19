@@ -28,12 +28,12 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ======= CONFIG =======
-BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
+BOT_TOKEN = ""                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
-CLAN_CHAT_ID = -1002482539490                   # -100...
+CLAN_CHAT_ID = 0                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696}                 # {111, 222}
+ADMIN_IDS = set()                  # {111, 222}
 MODERATOR_IDS = set()              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -356,10 +356,10 @@ async def ensure_removal_record(user_id: int):
 
 def removal_kb(user_id: int, done_db: bool, done_tg: bool, done_discord: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text=("✅ 1. Из таблицы отмечено" if done_db else "1. Отметить удаление из таблицы"), callback_data=f"remove:dbdone:{user_id}")
+    kb.button(text=("✅ 1. Из таблицы отмечено" if done_db else "1. Отметить удаление из таблицы"), callback_data=f"remove:db:{user_id}")
     kb.button(text=("✅ 2. Из клан-чата" if done_tg else "2. Удалить из клан-чата"), callback_data=f"remove:tg:{user_id}")
     kb.row()
-    kb.button(text=("✅ 3. Из Discord отмечено" if done_discord else "3. Отметить удаление из Discord"), callback_data=f"remove:discdone:{user_id}")
+    kb.button(text=("✅ 3. Из Discord отмечено" if done_discord else "3. Отметить удаление из Discord"), callback_data=f"remove:disc:{user_id}")
     kb.row()
     if done_db and done_tg and done_discord:
         kb.button(text="🧹 Завершить — стереть из базы", callback_data=f"remove:final:{user_id}")
@@ -862,7 +862,6 @@ async def on_user_joined_any(message: Message):
 async def cmd_help(message: Message):
     await message.answer(
         """Команды:
-/players — список игроков (для модераторов/админов)
 /start — регистрация
 /profile — ваш профиль
 /player <user_id | @username | часть ника> — профиль игрока (для модераторов, выбор фракции/удаление из профиля)
