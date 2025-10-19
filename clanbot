@@ -564,6 +564,7 @@ async def cmd_player(message: Message, command: Command):
 "
     "<code>/player #&lt;ClanID&gt;</code> — по ClanID"
 )
+    return
 
         return
     query = args[1].strip()
