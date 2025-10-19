@@ -30,7 +30,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # ======= CONFIG =======
 BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
-CLAN_CHAT_ID = 0                   # -100...
+CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
 ADMIN_IDS = {403704696, 1806167653}                 # {111, 222}
