@@ -28,12 +28,12 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ======= CONFIG =======
-BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
+BOT_TOKEN = ""                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
-CLAN_CHAT_ID = -1002482539490                   # -100...
+CLAN_CHAT_ID = 0                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653}                 # {111, 222}
+ADMIN_IDS = set()                  # {111, 222}
 MODERATOR_IDS = set()              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -356,11 +356,14 @@ async def ensure_removal_record(user_id: int):
 
 def removal_kb(user_id: int, done_db: bool, done_tg: bool, done_discord: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text=("✅ 1. Проверено (таблица)" if done_db else "1. Выполнено (таблица)"), callback_data=f"remove:dbdone:{user_id}")
-    kb.button(text=("✅ 2. Удалён из клан-чата" if done_tg else "2. Удалить из клан-чата"), callback_data=f"remove:tg:{user_id}")
+    kb.button(text=("✅ 1. Из таблицы отмечено" if done_db else "1. Отметить удаление из таблицы"), callback_data=f"remove:db:{user_id}")
+    kb.button(text=("✅ 2. Из клан-чата" if done_tg else "2. Удалить из клан-чата"), callback_data=f"remove:tg:{user_id}")
     kb.row()
-    kb.button(text=("✅ 3. Проверено (Discord)" if done_discord else "3. Выполнено (Discord)"), callback_data=f"remove:discdone:{user_id}")
+    kb.button(text=("✅ 3. Из Discord отмечено" if done_discord else "3. Отметить удаление из Discord"), callback_data=f"remove:disc:{user_id}")
     kb.row()
+    if done_db and done_tg and done_discord:
+        kb.button(text="🧹 Завершить — стереть из базы", callback_data=f"remove:final:{user_id}")
+        kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.as_markup()
 
@@ -1005,6 +1008,146 @@ async def on_export(call: CallbackQuery):
     path = await export_csv(kind, start, end)
     await bot.send_document(call.from_user.id, FSInputFile(path))
     await call.answer("CSV отправлен в личные сообщения.")
+
+# ======= Players list (admins/mods) =======
+PAGE_SIZE = 10
+
+def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if has_prev:
+        kb.button(text="◀️ Назад", callback_data=f"players:{filter_type}:{filter_value}:{page-1}")
+    if has_next:
+        kb.button(text="Далее ▶️", callback_data=f"players:{filter_type}:{filter_value}:{page+1}")
+    kb.row()
+    kb.button(text=("• Все" if filter_type=="all" else "Все"), callback_data="players:all::1")
+    kb.button(text=("• Вступили" if filter_type=="joined" else "Вступили"), callback_data="players:joined::1")
+    kb.button(text=("• Фракции" if filter_type=="faction" else "Фракции"), callback_data=f"players:choose_faction::{page}")
+    return kb.as_markup()
+
+def players_factions_kb(page: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
+        kb.button(text=title, callback_data=f"players:faction:{title}:1")
+    kb.row()
+    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
+        kb.button(text=title, callback_data=f"players:faction:{title}:1")
+    kb.row()
+    kb.button(text="⬅️ Назад (все)", callback_data="players:all::1")
+    return kb.as_markup()
+
+async def fetch_players(filter_type: str, filter_value: str, page: int):
+    offset = (page-1)*PAGE_SIZE
+    where = []
+    params = []
+    where.append("(status IS NULL OR status != ?)")
+    params.append("removed")
+    if filter_type == "joined":
+        where.append("status = ?")
+        params.append("joined")
+    elif filter_type == "faction" and filter_value:
+        where.append("faction = ?")
+        params.append(filter_value)
+    where_sql = " AND ".join(where) if where else "1=1"
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(f"SELECT COUNT(1) FROM users WHERE {where_sql}", params)
+        total = (await cur.fetchone())[0]
+        cur = await db.execute(
+            f"""SELECT clan_id, user_id, nickname, faction, status
+                FROM users
+                WHERE {where_sql}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?""",
+            params + [PAGE_SIZE, offset]
+        )
+        rows = await cur.fetchall()
+    has_next = (offset + PAGE_SIZE) < total
+    has_prev = page > 1
+    return rows, has_prev, has_next, total
+
+def format_players_list(rows, page: int, total: int, filter_type: str, filter_value: str) -> str:
+    title_map = {
+        "all": "Список игроков (все, кроме удалённых)",
+        "joined": "Список игроков (вступившие)",
+        "faction": f"Список игроков (фракция: {filter_value})" if filter_value else "Список игроков (по фракции)"
+    }
+    lines = [f"<b>{title_map.get(filter_type, 'Список игроков')}</b>"]
+    lines.append(f"Страница {page} • всего записей: {total}")
+    if not rows:
+        lines.append("— пусто —")
+    else:
+        for idx, (clan_id, user_id, nickname, faction, status) in enumerate(rows, 1):
+            cid = f"{int(clan_id):04d}" if clan_id else "—"
+            nick = nickname or "-"
+            fac = faction or "-"
+            st = status or "-"
+            lines.append(f"{idx:>2}. {cid} — {nick} ({fac}) — {st} — ID: <code>{user_id}</code>")
+    lines.append("\nОткройте профиль: /player <ID>")
+    return "\n".join(lines)
+
+@dp.message(F.text.startswith("/players"))
+async def cmd_players(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    filter_type = "all"
+    filter_value = ""
+    page = 1
+    rows, has_prev, has_next, total = await fetch_players(filter_type, filter_value, page)
+    text = format_players_list(rows, page, total, filter_type, filter_value)
+    await message.answer(text, reply_markup=players_nav_kb(filter_type, filter_value, page, has_prev, has_next))
+
+@dp.callback_query(F.data.startswith("players:choose_faction"))
+async def on_players_choose_faction(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Только модераторы/администраторы", show_alert=True)
+        return
+    await call.message.edit_text("Выберите фракцию:", reply_markup=players_factions_kb(1))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("players:"))
+async def on_players_list(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Только модераторы/администраторы", show_alert=True)
+        return
+    try:
+        _, ftype, fvalue, page_str = call.data.split(":", 3)
+        page = int(page_str or "1")
+        ftype = ftype or "all"
+        fvalue = fvalue or ""
+    except Exception:
+        await call.answer("Некорректные параметры.", show_alert=True)
+        return
+    rows, has_prev, has_next, total = await fetch_players(ftype, fvalue, page)
+    text = format_players_list(rows, page, total, ftype, fvalue)
+    try:
+        await call.message.edit_text(text, reply_markup=players_nav_kb(ftype, fvalue, page, has_prev, has_next))
+    except Exception:
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("remove:final:"))
+async def on_remove_final(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid_str = call.data.split(":")
+    target_id = int(uid_str)
+    # check all steps complete
+    done_db, done_tg, done_disc = await removal_state(target_id)
+    if not (done_db and done_tg and done_disc):
+        await call.answer("Сначала выполните все три шага чек-листа.", show_alert=True)
+        return
+    # hard delete from users and archive
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM users WHERE user_id=?", (target_id,))
+        await db.execute("DELETE FROM users_archive WHERE user_id=?", (target_id,))
+        await db.execute("DELETE FROM removal_checklist WHERE user_id=?", (target_id,))
+        await db.commit()
+    await call.answer("Игрок полностью удалён из базы бота.", show_alert=True)
+    try:
+        await call.message.edit_text("<b>Удаление завершено.</b> Игрок стерён из базы.")
+    except Exception:
+        pass
 
 async def main():
     await init_db()
