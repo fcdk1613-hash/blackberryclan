@@ -39,13 +39,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ======= CONFIG =======
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@SquadBlackBerry")  # public channel username
 CLAN_CHAT_ID = int(os.getenv("CLAN_CHAT_ID", "0"))  # numeric ID of the clan chat (supergroup)
 MODERATION_CHAT_ID = int(os.getenv("MODERATION_CHAT_ID", "0"))  # chat where moderators receive requests
 
 # Optional: per-user admin permissions (used for /start on moderators etc.)
-ADMIN_IDS = set(map(int, os.getenv("ADMIN_IDS", "").split())) if os.getenv("ADMIN_IDS") else set()
+ADMIN_IDS = set(map(int, os.getenv("403704696").split())) if os.getenv("ADMIN_IDS") else set()
 MODERATOR_IDS = set(map(int, os.getenv("MODERATOR_IDS", "").split())) if os.getenv("MODERATOR_IDS") else set()
 
 DB_PATH = os.getenv("DB_PATH", "blackberry_bot.db")
