@@ -833,25 +833,28 @@ async def on_user_joined_clan(message: Message):
                 await upsert_user(uid, status=Status.JOINED.value, joined_at=now_iso)
                 user = await get_user(uid)
             nickname = user.get("nickname") or member.full_name
-tg_username = None
-try:
-    if getattr(member, 'username', None):
-        tg_username = f"@{member.username}"
-except Exception:
-    tg_username = None
-if not tg_username and user:
-    link = user.get("tg_link")
-    if link:
-        l = link.strip()
-        if l.startswith("https://t.me/") or l.startswith("http://t.me/") or l.startswith("t.me/"):
-            uname = l.split("t.me/")[-1].strip("/ ")
-            if uname:
-                tg_username = f"@{uname}"
-        elif l.startswith("@"):
-            tg_username = l
-announce = f"<b>{nickname}</b> ({tg_username}) вступил в наш клан!" if tg_username else f"<b>{nickname}</b> вступил в наш клан!"
-await bot.send_message(CLAN_CHAT_ID, announce)
-clanid = pad_clan_id(user.get("clan_id"))
+            tg_username = None
+            try:
+                if getattr(member, "username", None):
+                    tg_username = f"@{member.username}"
+            except Exception:
+                tg_username = None
+            if not tg_username and user:
+                link = user.get("tg_link")
+                if link:
+                    l = link.strip()
+                    if l.startswith("https://t.me/") or l.startswith("http://t.me/") or l.startswith("t.me/"):
+                        uname = l.split("t.me/")[-1].strip("/ ")
+                        if uname:
+                            tg_username = f"@{uname}"
+                    elif l.startswith("@"):
+                        tg_username = l
+            announce = (
+                f"<b>{nickname}</b> ({tg_username}) вступил в наш клан!" if tg_username
+                else f"<b>{nickname}</b> вступил в наш клан!"
+            )
+            await bot.send_message(CLAN_CHAT_ID, announce)
+            clanid = pad_clan_id(user.get("clan_id"))
             join_text = (
                 f"<b>Участник вступил в клан</b>\n"
                 f"ClanID: <code>{clanid}</code>\n"
