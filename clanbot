@@ -271,10 +271,6 @@ def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 def approve_kb(user_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
-    kb.button(text="❌ Отклонить", callback_data=f"reject:{user_id}")
-    return kb.as_markup()
 
 def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -288,6 +284,11 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.as_markup()
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"reject:{user_id}")
+    return kb.as_markup()
+
 def pad_clan_id(v: Optional[int]) -> str:
     if not v:
         return "—"
@@ -1350,9 +1351,84 @@ async def ensure_joined_if_member(user_id: int):
     except Exception:
         pass
 
+async def send_evening_training_poll():
+    # Moscow date for the poll
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    date_str = today.isoformat()
+    text = f"Будешь сегодня на тренировке?\nДата: <b>{date_str}</b>"
+    kb = training_kb(date_str)
+    # send only to users without today's response
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT u.user_id FROM users u "
+            "WHERE (u.status IS NULL OR u.status != ?) AND NOT EXISTS ("
+            "  SELECT 1 FROM training_attendance t WHERE t.user_id=u.user_id AND t.date=?"
+            ")",
+            ("removed", date_str)
+        )
+        ids = [r[0] for r in await cur.fetchall()]
+    for uid in ids:
+        try:
+            await bot.send_message(uid, text, reply_markup=kb)
+        except Exception:
+            continue
+
+async def check_training_inactive_3days():
+    # Find users who have no answers for the last 3 days (MSK)
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    days = [(today - timedelta(days=i)).isoformat() for i in range(0, 3)]
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT u.user_id FROM users u "
+            "WHERE (u.status IS NULL OR u.status != ?) AND u.user_id NOT IN ("
+            "  SELECT DISTINCT user_id FROM training_attendance WHERE date IN (?,?,?)"
+            ")",
+            ("removed", days[0], days[1], days[2])
+        )
+        ids = [r[0] for r in await cur.fetchall()]
+    if not ids:
+        return
+    for uid in ids:
+        try:
+            user = await get_user(uid)
+        except Exception:
+            user = None
+        nickname = user.get("nickname") if user else None
+        headline = f"Внимание! Игрок {nickname} (ID: {uid}) не выходит на связь в течение 3 дней" if nickname else f"Внимание! Игрок ID: {uid} не выходит на связь в течение 3 дней"
+        sent = False
+        # Prefer existing moderation notifier if present
+        try:
+            await send_to_moderation(headline)
+            sent = True
+        except Exception:
+            sent = False
+        if not sent:
+            # Fallback: notify all admins and moderators
+            try:
+                all_ids = list(ADMIN_IDS | MODERATOR_IDS)
+                for mid in all_ids:
+                    try:
+                        await bot.send_message(mid, headline)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
 async def main():
     await init_db()
     logging.info("DB initialized at %s", DB_PATH)
+    # Scheduler for training polls and inactivity checks
+    try:
+    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
+    scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
+    scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
+    scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
+    scheduler.start()
+    except Exception:
+        pass
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
