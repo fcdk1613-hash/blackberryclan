@@ -28,12 +28,12 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ======= CONFIG =======
-BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
+BOT_TOKEN = ""                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
-CLAN_CHAT_ID = -1002482539490                   # -100...
+CLAN_CHAT_ID = 0                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696}                 # {111, 222}
+ADMIN_IDS = set()                  # {111, 222}
 MODERATOR_IDS = set()              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -356,10 +356,10 @@ async def ensure_removal_record(user_id: int):
 
 def removal_kb(user_id: int, done_db: bool, done_tg: bool, done_discord: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text=("✅ 1. Из таблицы отмечено" if done_db else "1. Отметить удаление из таблицы"), callback_data=f"remove:db:{user_id}")
+    kb.button(text=("✅ 1. Из таблицы отмечено" if done_db else "1. Отметить удаление из таблицы"), callback_data=f"remove:dbdone:{user_id}")
     kb.button(text=("✅ 2. Из клан-чата" if done_tg else "2. Удалить из клан-чата"), callback_data=f"remove:tg:{user_id}")
     kb.row()
-    kb.button(text=("✅ 3. Из Discord отмечено" if done_discord else "3. Отметить удаление из Discord"), callback_data=f"remove:disc:{user_id}")
+    kb.button(text=("✅ 3. Из Discord отмечено" if done_discord else "3. Отметить удаление из Discord"), callback_data=f"remove:discdone:{user_id}")
     kb.row()
     if done_db and done_tg and done_discord:
         kb.button(text="🧹 Завершить — стереть из базы", callback_data=f"remove:final:{user_id}")
@@ -833,37 +833,48 @@ async def on_user_joined_clan(message: Message):
                 await upsert_user(uid, status=Status.JOINED.value, joined_at=now_iso)
                 user = await get_user(uid)
             nickname = user.get("nickname") or member.full_name
-tg_username = None
-try:
-    if member.username:
-        tg_username = f"@{member.username}"
-except Exception:
-    tg_username = None
-if not tg_username and user:
-    link = user.get("tg_link")
-    if link:
-        l = link.strip()
-        if l.startswith("https://t.me/") or l.startswith("http://t.me/") or l.startswith("t.me/"):
-            uname = l.split("t.me/")[-1].strip("/ ")
-            if uname:
-                tg_username = f"@{uname}"
-        elif l.startswith("@"):
-            tg_username = l
-announce = f"<b>{nickname}</b> ({tg_username}) вступил в наш клан!" if tg_username else f"<b>{nickname}</b> вступил в наш клан!"
-await bot.send_message(CLAN_CHAT_ID, announce)
-clanid = pad_clan_id(user.get("clan_id"))
+            tg_username = None
+            try:
+                if getattr(member, 'username', None):
+                    tg_username = f"@{member.username}"
+            except Exception:
+                tg_username = None
+            if not tg_username and user:
+                link = user.get("tg_link")
+                if link:
+                    l = link.strip()
+                    if l.startswith("https://t.me/") or l.startswith("http://t.me/") or l.startswith("t.me/"):
+                        uname = l.split("t.me/")[-1].strip("/ ")
+                        if uname:
+                            tg_username = f"@{uname}"
+                    elif l.startswith("@"):
+                        tg_username = l
+            announce = f"<b>{nickname}</b> ({tg_username}) вступил в наш клан!" if tg_username else f"<b>{nickname}</b> вступил в наш клан!"
+            await bot.send_message(CLAN_CHAT_ID, announce)
+            clanid = pad_clan_id(user.get("clan_id"))
             join_text = (
-                f"<b>Участник вступил в клан</b>\n"
-                f"ClanID: <code>{clanid}</code>\n"
-                f"Telegram ID: <code>{uid}</code>\n"
-                f"Ник: {nickname}\n"
-                f"Discord: {user.get('discord') or '-'}\n"
-                f"SteamID: {user.get('steamid') or '-'}\n"
-                f"Дата рождения: {user.get('birth_date') or '-'}\n"
-                f"Возраст: {user.get('age') or '-'}\n"
-                f"Фракция: {user.get('faction') or '-'}\n"
-                f"Часовой пояс: {user.get('timezone') or '-'}\n"
-                f"Личный TG: {user.get('tg_link') or '-'}\n"
+                f"<b>Участник вступил в клан</b>
+"
+                f"ClanID: <code>{clanid}</code>
+"
+                f"Telegram ID: <code>{uid}</code>
+"
+                f"Ник: {nickname}
+"
+                f"Discord: {user.get('discord') or '-'}
+"
+                f"SteamID: {user.get('steamid') or '-'}
+"
+                f"Дата рождения: {user.get('birth_date') or '-'}
+"
+                f"Возраст: {user.get('age') or '-'}
+"
+                f"Фракция: {user.get('faction') or '-'}
+"
+                f"Часовой пояс: {user.get('timezone') or '-'}
+"
+                f"Личный TG: {user.get('tg_link') or '-'}
+"
                 f"Дата вступления: {user.get('joined_at') or now_iso}"
             )
             await send_to_moderation(join_text)
