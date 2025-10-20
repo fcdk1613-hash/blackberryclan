@@ -833,8 +833,25 @@ async def on_user_joined_clan(message: Message):
                 await upsert_user(uid, status=Status.JOINED.value, joined_at=now_iso)
                 user = await get_user(uid)
             nickname = user.get("nickname") or member.full_name
-            await bot.send_message(CLAN_CHAT_ID, f"<b>{nickname}</b> вступил в наш клан!")
-            clanid = pad_clan_id(user.get("clan_id"))
+tg_username = None
+try:
+    if member.username:
+        tg_username = f"@{member.username}"
+except Exception:
+    tg_username = None
+if not tg_username and user:
+    link = user.get("tg_link")
+    if link:
+        l = link.strip()
+        if l.startswith("https://t.me/") or l.startswith("http://t.me/") or l.startswith("t.me/"):
+            uname = l.split("t.me/")[-1].strip("/ ")
+            if uname:
+                tg_username = f"@{uname}"
+        elif l.startswith("@"):
+            tg_username = l
+announce = f"<b>{nickname}</b> ({tg_username}) вступил в наш клан!" if tg_username else f"<b>{nickname}</b> вступил в наш клан!"
+await bot.send_message(CLAN_CHAT_ID, announce)
+clanid = pad_clan_id(user.get("clan_id"))
             join_text = (
                 f"<b>Участник вступил в клан</b>\n"
                 f"ClanID: <code>{clanid}</code>\n"
@@ -1009,39 +1026,7 @@ async def on_export(call: CallbackQuery):
     await bot.send_document(call.from_user.id, FSInputFile(path))
     await call.answer("CSV отправлен в личные сообщения.")
 
-
-def username_from_tglink(link: str | None) -> str:
-    if not link:
-        return "—"
-    link = link.strip()
-    if link.startswith("https://t.me/") or link.startswith("http://t.me/") or link.startswith("t.me/"):
-        uname = link.split("t.me/")[-1].strip("/ ")
-        if uname:
-            return "@" + uname
-    if link.startswith("@"):
-        return link
-    return "—"
 # ======= Players list (admins/mods) =======
-
-async def fetch_joined_players(limit: int = 2000):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT clan_id, nickname, tg_link FROM users WHERE status=? ORDER BY clan_id ASC",
-            ("joined",)
-        )
-        return await cur.fetchall()
-
-def format_players_brief(rows) -> str:
-    lines = ["<b>Список игроков клана</b>"]
-    if not rows:
-        lines.append("— пока пусто —")
-    else:
-        for clan_id, nickname, tg_link in rows:
-            cid = f"{int(clan_id):04d}" if clan_id else "—"
-            nick = username_from_tglink(tg_link)
-            name = nickname or "—"
-            lines.append(f"{cid} — Ник: {nick} — Имя: {name}")
-    return "\n".join(lines)
 PAGE_SIZE = 10
 
 def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
@@ -1116,15 +1101,17 @@ def format_players_list(rows, page: int, total: int, filter_type: str, filter_va
     lines.append("\nОткройте профиль: /player <ID>")
     return "\n".join(lines)
 
-
-@dp.message(Command("players"))
+@dp.message(F.text.startswith("/players"))
 async def cmd_players(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
         return
-    rows = await fetch_joined_players()
-    text = format_players_brief(rows)
-    await message.answer(text)
+    filter_type = "all"
+    filter_value = ""
+    page = 1
+    rows, has_prev, has_next, total = await fetch_players(filter_type, filter_value, page)
+    text = format_players_list(rows, page, total, filter_type, filter_value)
+    await message.answer(text, reply_markup=players_nav_kb(filter_type, filter_value, page, has_prev, has_next))
 
 @dp.callback_query(F.data.startswith("players:choose_faction"))
 async def on_players_choose_faction(call: CallbackQuery):
