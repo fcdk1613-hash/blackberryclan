@@ -406,6 +406,7 @@ async def cmd_start(message: Message, state: FSMContext):
         created_at=datetime.utcnow().isoformat(),
     )
     await ensure_clan_ids()
+    await ensure_joined_if_member(message.from_user.id)
     await message.answer(
         "Привет! Я бот клана Blackberry. Для начала регистрации поделитесь номером телефона:",
         reply_markup=phone_kb(),
@@ -758,6 +759,7 @@ async def on_approve(call: CallbackQuery):
 
     faction = user.get("faction") or "Рекрут"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
+    await ensure_joined_if_member(target_id)
 
     link = await create_invite_link()
     if not link:
@@ -1142,6 +1144,16 @@ async def cmd_players(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
         return
+
+    # Sync: approved users already in chat -> mark as JOINED
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("SELECT user_id FROM users WHERE status=?", (Status.APPROVED.value,))
+            ids = [r[0] for r in await cur.fetchall()]
+        for uid in ids[:100]:
+            await ensure_joined_if_member(uid)
+    except Exception:
+        pass
     rows = await fetch_joined_players()
     text = format_players_brief(rows)
     await message.answer(text)
@@ -1196,6 +1208,24 @@ async def on_remove_final(call: CallbackQuery):
     await call.answer("Игрок полностью удалён из базы бота.", show_alert=True)
     try:
         await call.message.edit_text("<b>Удаление завершено.</b> Игрок стерён из базы.")
+    except Exception:
+        pass
+
+async def ensure_joined_if_member(user_id: int):
+    """
+    If user is already a member of the clan chat, ensure status=JOINED and set joined_at if missing.
+    """
+    try:
+        member = await bot.get_chat_member(CLAN_CHAT_ID, user_id)
+        if member.status in ("member", "administrator", "creator"):
+            user = await get_user(user_id)
+            if user is None:
+                return
+            updates = {"status": Status.JOINED.value}
+            if not user.get("joined_at"):
+                from datetime import datetime
+                updates["joined_at"] = datetime.utcnow().isoformat()
+            await upsert_user(user_id, **updates)
     except Exception:
         pass
 
