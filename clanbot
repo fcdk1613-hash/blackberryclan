@@ -28,12 +28,12 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ======= CONFIG =======
-BOT_TOKEN = ""                     # ← token from @BotFather (required)
+BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
-CLAN_CHAT_ID = 0                   # -100...
+CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = set()                  # {111, 222}
+ADMIN_IDS = {403704696}                 # {111, 222}
 MODERATOR_IDS = set()              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -553,20 +553,7 @@ async def cmd_player(message: Message, command: Command):
         return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer(
-    "Использование:
-"
-    "<code>/player &lt;user_id&gt;</code> — по Telegram ID
-"
-    "<code>/player @username</code> — по username
-"
-    "<code>/player часть_ника</code> — по фрагменту ника
-"
-    "<code>/player #&lt;ClanID&gt;</code> — по ClanID"
-)
-
-    return
-
+        await message.answer("Использование: /player <user_id | @username | часть ника>")
         return
     query = args[1].strip()
 
@@ -583,7 +570,7 @@ async def cmd_player(message: Message, command: Command):
             lines = ["Найдено несколько пользователей:"]
             for u in matches:
                 lines.append(f"• {u.get('nickname') or '-'} — ClanID: {pad_clan_id(u.get('clan_id'))} — ID: <code>{u['user_id']}</code> — фракция: {u.get('faction') or '-'}")
-            lines.append("\nУточните: /player &lt;ID&gt;")
+            lines.append("\nУточните: /player <ID>")
             await message.answer("\n".join(lines))
             return
 
@@ -1022,7 +1009,39 @@ async def on_export(call: CallbackQuery):
     await bot.send_document(call.from_user.id, FSInputFile(path))
     await call.answer("CSV отправлен в личные сообщения.")
 
+
+def username_from_tglink(link: str | None) -> str:
+    if not link:
+        return "—"
+    link = link.strip()
+    if link.startswith("https://t.me/") or link.startswith("http://t.me/") or link.startswith("t.me/"):
+        uname = link.split("t.me/")[-1].strip("/ ")
+        if uname:
+            return "@" + uname
+    if link.startswith("@"):
+        return link
+    return "—"
 # ======= Players list (admins/mods) =======
+
+async def fetch_joined_players(limit: int = 2000):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT clan_id, nickname, tg_link FROM users WHERE status=? ORDER BY clan_id ASC",
+            ("joined",)
+        )
+        return await cur.fetchall()
+
+def format_players_brief(rows) -> str:
+    lines = ["<b>Список игроков клана</b>"]
+    if not rows:
+        lines.append("— пока пусто —")
+    else:
+        for clan_id, nickname, tg_link in rows:
+            cid = f"{int(clan_id):04d}" if clan_id else "—"
+            nick = username_from_tglink(tg_link)
+            name = nickname or "—"
+            lines.append(f"{cid} — Ник: {nick} — Имя: {name}")
+    return "\n".join(lines)
 PAGE_SIZE = 10
 
 def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
@@ -1094,20 +1113,18 @@ def format_players_list(rows, page: int, total: int, filter_type: str, filter_va
             fac = faction or "-"
             st = status or "-"
             lines.append(f"{idx:>2}. {cid} — {nick} ({fac}) — {st} — ID: <code>{user_id}</code>")
-    lines.append("\nОткройте профиль: /player &lt;ID&gt;")
+    lines.append("\nОткройте профиль: /player <ID>")
     return "\n".join(lines)
+
 
 @dp.message(Command("players"))
 async def cmd_players(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
         return
-    filter_type = "all"
-    filter_value = ""
-    page = 1
-    rows, has_prev, has_next, total = await fetch_players(filter_type, filter_value, page)
-    text = format_players_list(rows, page, total, filter_type, filter_value)
-    await message.answer(text, reply_markup=players_nav_kb(filter_type, filter_value, page, has_prev, has_next))
+    rows = await fetch_joined_players()
+    text = format_players_brief(rows)
+    await message.answer(text)
 
 @dp.callback_query(F.data.startswith("players:choose_faction"))
 async def on_players_choose_faction(call: CallbackQuery):
