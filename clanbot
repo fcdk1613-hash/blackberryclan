@@ -235,6 +235,21 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
+async def ensure_training_tables():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS training_attendance(
+                date TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                response TEXT NOT NULL,   -- 'yes' | 'no' | 'late'
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(date, user_id)
+            )"""
+        )
+        await db.commit()
+
 def phone_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📱 Отправить номер", request_contact=True)]],
