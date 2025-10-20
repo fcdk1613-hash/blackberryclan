@@ -26,6 +26,9 @@ from aiogram.types import (
     FSInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from zoneinfo import ZoneInfo
 
 # ======= CONFIG =======
 BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
@@ -1187,6 +1190,14 @@ def format_players_brief(rows) -> str:
     return "\n".join(lines)
 PAGE_SIZE = 10
 
+
+def training_kb(date_str: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Да", callback_data=f"train:yes:{date_str}")
+    kb.button(text="Нет", callback_data=f"train:no:{date_str}")
+    kb.button(text="Опоздаю", callback_data=f"train:late:{date_str}")
+    return kb.as_markup()
+
 def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if has_prev:
@@ -1415,16 +1426,44 @@ async def check_training_inactive_3days():
             except Exception:
                 pass
 
+async def save_training_response(user_id: int, date_str: str, response: str, reason: str | None):
+    now_iso = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO training_attendance(date,user_id,response,reason,created_at,updated_at) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(date,user_id) DO UPDATE SET response=excluded.response, reason=excluded.reason, updated_at=excluded.updated_at",
+            (date_str, user_id, response, reason, now_iso, now_iso)
+        )
+        await db.commit()
+
+async def send_daily_training_poll():
+    # Moscow date for the poll
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    date_str = today.isoformat()
+    text = f"Будешь сегодня на тренировке?\nДата: <b>{date_str}</b>"
+    kb = training_kb(date_str)
+    # send to all active users (exclude removed)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM users WHERE status IS NULL OR status != ?", ("removed",))
+        ids = [r[0] for r in await cur.fetchall()]
+    for uid in ids:
+        try:
+            await bot.send_message(uid, text, reply_markup=kb)
+        except Exception:
+            continue
+
 async def main():
     await init_db()
+    await ensure_training_tables()
     logging.info("DB initialized at %s", DB_PATH)
     # Scheduler for training polls and inactivity checks
     try:
-    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
-    scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
-    scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
-    scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
-    scheduler.start()
+        scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
+        scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
+        scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
+        scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
+        scheduler.start()
     except Exception:
         pass
 
