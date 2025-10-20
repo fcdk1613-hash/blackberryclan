@@ -271,6 +271,10 @@ def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 def approve_kb(user_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"reject:{user_id}")
+    return kb.as_markup()
 
 def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -284,11 +288,6 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.as_markup()
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
-    kb.button(text="❌ Отклонить", callback_data=f"reject:{user_id}")
-    return kb.as_markup()
-
 def pad_clan_id(v: Optional[int]) -> str:
     if not v:
         return "—"
