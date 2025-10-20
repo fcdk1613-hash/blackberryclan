@@ -230,6 +230,10 @@ class RegStates(StatesGroup):
 class AdminEdit(StatesGroup):
     waiting_value = State()
 
+class TrainingReason(StatesGroup):
+    waiting_reason = State()
+
+
 # ======= BOT SETUP =======
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -1467,6 +1471,128 @@ async def send_daily_training_poll():
             await bot.send_message(uid, text, reply_markup=kb)
         except Exception:
             continue
+
+@dp.callback_query(F.data.startswith("train:"))
+async def on_training_answer(call: CallbackQuery, state: FSMContext):
+    try:
+        _, choice, date_str = call.data.split(":")
+    except ValueError:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+    uid = call.from_user.id
+    if choice == "yes":
+        await save_training_response(uid, date_str, "yes", None)
+        try:
+            await call.message.edit_text(f"Ответ сохранён: <b>Да</b> на {date_str}")
+        except Exception:
+            pass
+        await call.answer()
+        return
+    # For 'no' and 'late' ask reason
+    await state.update_data(train_choice=choice, train_date=date_str, train_chat_id=call.message.chat.id, train_msg_id=call.message.message_id)
+    await call.message.answer("Введите причину:")
+    await state.set_state(TrainingReason.waiting_reason)
+    await call.answer()
+
+@dp.message(TrainingReason.waiting_reason)
+async def on_training_reason(message: Message, state: FSMContext):
+    data = await state.get_data()
+    uid = message.from_user.id
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.answer("Пожалуйста, укажите причину текстом.")
+        return
+    choice = data.get("train_choice")
+    date_str = data.get("train_date")
+    await save_training_response(uid, date_str, choice, reason)
+    label = "Нет" if choice == "no" else "Опоздаю"
+    await message.answer(f"Ответ сохранён: <b>{label}</b> ({reason}) на {date_str}")
+    # Optionally remove keyboard from original poll to avoid duplicate clicks
+    try:
+        await bot.edit_message_reply_markup(chat_id=data.get("train_chat_id"), message_id=data.get("train_msg_id"), reply_markup=None)
+    except Exception:
+        pass
+    await state.clear()
+
+async def fetch_training_stats(date_from: str, date_to: str | None = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        if not date_to or date_to == date_from:
+            cur = await db.execute(
+                "SELECT response, COUNT(*) FROM training_attendance WHERE date=? GROUP BY response",
+                (date_from,)
+            )
+            agg = {row[0]: row[1] for row in await cur.fetchall()}
+            cur = await db.execute(
+                "SELECT user_id, response, reason FROM training_attendance WHERE date=? AND response IN ('no','late')",
+                (date_from,)
+            )
+            details = await cur.fetchall()
+            return {"single": True, "date": date_from, "agg": agg, "details": details}
+        else:
+            cur = await db.execute(
+                "SELECT date, response, COUNT(*) FROM training_attendance WHERE date BETWEEN ? AND ? GROUP BY date, response ORDER BY date ASC",
+                (date_from, date_to)
+            )
+            rows = await cur.fetchall()
+            return {"single": False, "rows": rows}
+
+@dp.message(Command("train_stats"))  # /train_stats [YYYY-MM-DD] or /train_stats YYYY-MM-DD YYYY-MM-DD
+async def cmd_train_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) == 1:
+        # default: today (Moscow)
+        try:
+            msk = ZoneInfo("Europe/Moscow")
+            d = datetime.now(msk).date().isoformat()
+        except Exception:
+            d = datetime.utcnow().date().isoformat()
+        res = await fetch_training_stats(d)
+    else:
+        arg = args[1].strip()
+        if " " in arg or ":" in arg:
+            for sep in (":", " "):
+                if sep in arg:
+                    date_from, date_to = [x.strip() for x in arg.split(sep, 1)]
+                    break
+            res = await fetch_training_stats(date_from, date_to)
+        else:
+            res = await fetch_training_stats(arg)
+
+    if res.get("single"):
+        d = res["date"]
+        agg = res.get("agg", {})
+        yes = agg.get("yes", 0); no = agg.get("no", 0); late = agg.get("late", 0)
+        lines = [f"<b>Статистика тренировки на {d}</b>", f"Да: {yes} • Нет: {no} • Опоздаю: {late}"]
+        details = res.get("details", [])
+        if details:
+            lines.append("\nПричины:")
+            for uid, resp, reason in details:
+                label = "Нет" if resp=="no" else "Опоздаю"
+                lines.append(f"— {label}: <code>{uid}</code> — {reason}")
+        await message.answer("\n".join(lines))
+    else:
+        rows = res.get("rows", [])
+        if not rows:
+            await message.answer("Нет данных за указанный период.")
+            return
+        lines = ["<b>Статистика за период</b>"]
+        cur_d = None
+        agg_d = {}
+        def flush_day(d):
+            if not agg_d: return []
+            return [f"{d}: Да {agg_d.get('yes',0)} • Нет {agg_d.get('no',0)} • Опоздаю {agg_d.get('late',0)}"]
+        for d, resp, cnt in rows:
+            if d != cur_d:
+                if cur_d is not None:
+                    lines.extend(flush_day(cur_d))
+                cur_d = d; agg_d = {}
+            agg_d[resp] = cnt
+        if cur_d is not None:
+            lines.extend(flush_day(cur_d))
+        await message.answer("\n".join(lines))
 
 async def main():
     await init_db()
