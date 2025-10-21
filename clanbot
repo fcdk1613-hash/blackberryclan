@@ -400,7 +400,7 @@ def removal_kb(user_id: int, done_db: bool, done_tg: bool, done_discord: bool) -
     kb.row()
     kb.button(text=("✅ 3. Из Discord отмечено" if done_discord else "3. Отметить удаление из Discord"), callback_data=f"remove:discdone:{user_id}")
     kb.row()
-    if done_db and done_tg and done_discord:
+    if done_db and done_discord:
         kb.button(text="🧹 Завершить — стереть из базы", callback_data=f"remove:final:{user_id}")
         kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
