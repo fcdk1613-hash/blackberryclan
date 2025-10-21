@@ -456,7 +456,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def got_phone(message: Message, state: FSMContext):
     phone = message.contact.phone_number
     await state.update_data(phone=phone)
-    await message.answer("Отлично! Введите ник (реальное имя): Пример: Keech(Александр)", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Отлично! Введите ник(реальное имя): Пример: Keech(Александр)", reply_markup=ReplyKeyboardRemove())
     await state.set_state(RegStates.waiting_nickname)
 
 @dp.message(RegStates.waiting_phone)
