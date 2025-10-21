@@ -1579,7 +1579,9 @@ async def cmd_train_stats(message: Message):
             lines.append("\nПричины:")
             for uid, resp, reason in details:
                 label = "Нет" if resp=="no" else "Опоздаю"
-                lines.append(f"— {label}: <code>{uid}</code> — {reason}")
+                user = await get_user(uid)
+                name = user.get("nickname") if user and user.get("nickname") else str(uid)
+                lines.append(f"— {label}: {name} — {reason}")
         await message.answer("\n".join(lines))
     else:
         rows = res.get("rows", [])
