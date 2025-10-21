@@ -502,7 +502,7 @@ async def got_birthdate(message: Message, state: FSMContext):
 @dp.message(RegStates.waiting_tz)
 async def got_tz(message: Message, state: FSMContext):
     await state.update_data(timezone=message.text.strip())
-    await message.answer("Введите ссылку на ваш личный Telegram (например, https://t.me/username):")
+    await message.answer("Введите ссылку на ваш личный Telegram (например, https://t.me/username или @username):")
     await state.set_state(RegStates.waiting_tg_link)
 
 @dp.message(RegStates.waiting_tg_link)
