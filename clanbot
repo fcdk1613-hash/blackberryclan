@@ -16,6 +16,7 @@ from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+    ChatMemberUpdated,
     Message,
     KeyboardButton,
     ReplyKeyboardMarkup,
@@ -36,7 +37,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
 MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281}              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -367,6 +368,22 @@ async def notify_review_outcome(user_id: int, outcome: str):
             pass
 
 async def send_to_moderation(text: str, reply_markup: Optional[InlineKeyboardMarkup] = None):
+
+async def notify_staff(text: str):
+    sent = False
+    try:
+        await send_to_moderation(text)
+        sent = True
+    except Exception:
+        sent = False
+    try:
+        for rid in reviewer_ids():
+            try:
+                await bot.send_message(rid, text)
+            except Exception:
+                pass
+    except Exception:
+        pass
     if MODERATION_CHAT_ID:
         try:
             await bot.send_message(MODERATION_CHAT_ID, text, reply_markup=reply_markup)
@@ -1017,6 +1034,20 @@ async def on_user_joined_clan(message: Message):
             await send_to_moderation(join_text)
 
 @dp.message(F.new_chat_members)
+
+@dp.message(F.chat.id == CLAN_CHAT_ID, F.left_chat_member)
+async def on_user_left_clan(message: Message):
+    member = message.left_chat_member
+    try:
+        if member.is_bot:
+            return
+    except Exception:
+        pass
+    uid = getattr(member, "id", None)
+    user = await get_user(uid) if uid else None
+    name = (user.get("nickname") if user and user.get("nickname") else getattr(member, "full_name", str(uid or "")))
+    text = f"Игрок \"{name}\" вышел из клан-чата в Телеграмме"
+    await notify_staff(text)
 async def on_user_joined_any(message: Message):
     if message.chat.id != CLAN_CHAT_ID:
         return
@@ -1679,6 +1710,22 @@ async def on_new_user_delete(call: CallbackQuery):
         pass
     await call.answer("Удалён.")
 
+
+@dp.chat_member()
+async def on_chat_member_update(event: ChatMemberUpdated):
+    try:
+        chat_type = getattr(event.chat, "type", None)
+    except Exception:
+        chat_type = None
+    if chat_type != "private":
+        return
+    new_status = getattr(getattr(event, "new_chat_member", None), "status", None)
+    if new_status in ("kicked", "left"):
+        uid = getattr(getattr(event, "from_user", None), "id", None) or getattr(event.chat, "id", None)
+        user = await get_user(uid) if uid else None
+        name = (user.get("nickname") if user and user.get("nickname") else (getattr(getattr(event, "from_user", None), "full_name", str(uid or ""))))
+        text = f"Игрок \"{name}\" вышел из этого бота"
+        await notify_staff(text)
 async def main():
     await init_db()
     await ensure_training_tables()
