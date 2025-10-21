@@ -1696,6 +1696,21 @@ async def on_new_user_delete(call: CallbackQuery):
         pass
     await call.answer("Удалён.")
 
+
+@dp.message(F.chat.id == CLAN_CHAT_ID, F.left_chat_member)
+async def on_user_left_clan_msg(message: Message):
+    member = message.left_chat_member
+    try:
+        if member.is_bot:
+            return
+    except Exception:
+        pass
+    uid = getattr(member, "id", None)
+    user = await get_user(uid) if uid else None
+    nickname = (user.get("nickname") if user and user.get("nickname") else getattr(member, "full_name", str(uid or "")))
+    uname = getattr(member, "username", None)
+    shown = f"{nickname} (@{uname})" if uname else f"{nickname}"
+    await notify_staff(f"Игрок \"{shown}\" вышел из клан-чата в Телеграмме")
 async def main():
     await init_db()
     await ensure_training_tables()
@@ -1710,7 +1725,7 @@ async def main():
     except Exception:
         pass
 
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=["message","callback_query","chat_member","my_chat_member"])
 
 if __name__ == "__main__":
     try:
