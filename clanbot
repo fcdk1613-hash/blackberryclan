@@ -1347,7 +1347,7 @@ async def on_remove_final(call: CallbackQuery):
     target_id = int(uid_str)
     # check all steps complete
     done_db, done_tg, done_disc = await removal_state(target_id)
-    if not (done_db and done_tg and done_disc):
+    if not (done_db and done_disc):
         await call.answer("Сначала выполните все три шага чек-листа.", show_alert=True)
         return
     # hard delete from users and archive
