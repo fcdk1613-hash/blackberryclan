@@ -1390,8 +1390,7 @@ async def send_evening_training_poll():
     # send only to users without today's response
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT u.user_id FROM users u "
-            "WHERE (u.status IS NULL OR u.status != ?) AND (u.faction IS NULL OR u.faction != "Резерв") AND NOT EXISTS ("
+            ("SELECT u.user_id FROM users u WHERE (u.status IS NULL OR u.status != ?) AND (u.faction IS NULL OR u.faction != "Резерв") AND NOT EXISTS ("
             "  SELECT 1 FROM training_attendance t WHERE t.user_id=u.user_id AND t.date=?"
             ")",
             ("removed", date_str)
@@ -1410,8 +1409,7 @@ async def check_training_inactive_3days():
     days = [(today - timedelta(days=i)).isoformat() for i in range(0, 3)]
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT u.user_id FROM users u "
-            "WHERE (u.status IS NULL OR u.status != ?) AND (u.faction IS NULL OR u.faction != "Резерв") AND u.user_id NOT IN ("
+            ("SELECT u.user_id FROM users u WHERE (u.status IS NULL OR u.status != ?) AND (u.faction IS NULL OR u.faction != "Резерв") AND u.user_id NOT IN ("
             "  SELECT DISTINCT user_id FROM training_attendance WHERE date IN (?,?,?)"
             ")",
             ("removed", days[0], days[1], days[2])
