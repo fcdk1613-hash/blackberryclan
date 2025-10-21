@@ -1546,8 +1546,8 @@ async def fetch_training_stats(date_from: str, date_to: str | None = None):
 
 @dp.message(Command("train_stats"))  # /train_stats [YYYY-MM-DD] or /train_stats YYYY-MM-DD YYYY-MM-DD
 async def cmd_train_stats(message: Message):
-    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
-        await message.answer("Только модераторы/администраторы.")
+    if message.from_user.id not in (ADMIN_IDS):
+        await message.answer("Только администраторы.")
         return
     args = message.text.split(maxsplit=1)
     if len(args) == 1:
