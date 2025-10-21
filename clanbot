@@ -36,7 +36,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653}                 # {111, 222}
 MODERATOR_IDS = set()              # {333}
 
 DB_PATH = "blackberry_bot.db"
