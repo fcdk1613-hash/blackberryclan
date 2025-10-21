@@ -1390,9 +1390,14 @@ async def send_evening_training_poll():
     # send only to users without today's response
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            ("SELECT u.user_id FROM users u WHERE (u.status IS NULL OR u.status != ?) AND (u.faction IS NULL OR u.faction != 'Резерв') AND NOT EXISTS ("
-            "  SELECT 1 FROM training_attendance t WHERE t.user_id=u.user_id AND t.date=?"
-            ")",
+            """
+            SELECT u.user_id FROM users u
+            WHERE (u.status IS NULL OR u.status != ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM training_attendance t
+                WHERE t.user_id = u.user_id AND t.date = ?
+              )
+            """,
             ("removed", date_str)
         )
         ids = [r[0] for r in await cur.fetchall()]
@@ -1409,9 +1414,14 @@ async def check_training_inactive_3days():
     days = [(today - timedelta(days=i)).isoformat() for i in range(0, 3)]
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            ("SELECT u.user_id FROM users u WHERE (u.status IS NULL OR u.status != ?) AND (u.faction IS NULL OR u.faction != 'Резерв') AND u.user_id NOT IN ("
-            "  SELECT DISTINCT user_id FROM training_attendance WHERE date IN (?,?,?)"
-            ")",
+            """
+            SELECT u.user_id FROM users u
+            WHERE (u.status IS NULL OR u.status != ?)
+              AND u.user_id NOT IN (
+                SELECT DISTINCT user_id FROM training_attendance
+                WHERE date IN (?,?,?)
+              )
+            """,
             ("removed", days[0], days[1], days[2])
         )
         ids = [r[0] for r in await cur.fetchall()]
@@ -1462,7 +1472,7 @@ async def send_daily_training_poll():
     kb = training_kb(date_str)
     # send to all active users (exclude removed)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT user_id FROM users WHERE (status IS NULL OR status != ?) AND (faction IS NULL OR faction != "Резерв")", ("removed",))
+        cur = await db.execute("SELECT user_id FROM users WHERE status IS NULL OR status != ?", ("removed",))
         ids = [r[0] for r in await cur.fetchall()]
     for uid in ids:
         try:
@@ -1516,14 +1526,12 @@ async def fetch_training_stats(date_from: str, date_to: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         if not date_to or date_to == date_from:
             cur = await db.execute(
-                "SELECT t.response, COUNT(*) FROM training_attendance t JOIN users u ON u.user_id=t.user_id "
-                "WHERE t.date=? AND (u.faction IS NULL OR u.faction != 'Резерв') GROUP BY t.response",
+                "SELECT response, COUNT(*) FROM training_attendance WHERE date=? GROUP BY response",
                 (date_from,)
             )
             agg = {row[0]: row[1] for row in await cur.fetchall()}
             cur = await db.execute(
-                "SELECT t.user_id, u.nickname, t.response, t.reason FROM training_attendance t JOIN users u ON u.user_id=t.user_id "
-                "WHERE t.date=? AND (u.faction IS NULL OR u.faction != 'Резерв') AND t.response IN ('no','late')",
+                "SELECT user_id, response, reason FROM training_attendance WHERE date=? AND response IN ('no','late')",
                 (date_from,)
             )
             details = await cur.fetchall()
@@ -1569,10 +1577,9 @@ async def cmd_train_stats(message: Message):
         details = res.get("details", [])
         if details:
             lines.append("\nПричины:")
-            for uid, nickname, resp, reason in details:
+            for uid, resp, reason in details:
                 label = "Нет" if resp=="no" else "Опоздаю"
-                shown = f"{nickname} (ID: {uid})" if nickname else f"ID: {uid}"
-                lines.append(f"— {label}: {shown} — {reason}")
+                lines.append(f"— {label}: <code>{uid}</code> — {reason}")
         await message.answer("\n".join(lines))
     else:
         rows = res.get("rows", [])
