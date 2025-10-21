@@ -16,7 +16,6 @@ from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    ChatMemberUpdated,
     Message,
     KeyboardButton,
     ReplyKeyboardMarkup,
@@ -37,7 +36,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
 MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281}              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -368,21 +367,6 @@ async def notify_review_outcome(user_id: int, outcome: str):
             pass
 
 async def send_to_moderation(text: str, reply_markup: Optional[InlineKeyboardMarkup] = None):
-async def notify_staff(text: str):
-    sent = False
-    try:
-        await send_to_moderation(text)
-        sent = True
-    except Exception:
-        sent = False
-    try:
-        for rid in reviewer_ids():
-            try:
-                await bot.send_message(rid, text)
-            except Exception:
-                pass
-    except Exception:
-        pass
     if MODERATION_CHAT_ID:
         try:
             await bot.send_message(MODERATION_CHAT_ID, text, reply_markup=reply_markup)
