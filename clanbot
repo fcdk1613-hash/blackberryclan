@@ -16,7 +16,6 @@ from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    ChatMemberUpdated,
     Message,
     KeyboardButton,
     ReplyKeyboardMarkup,
@@ -37,7 +36,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
 MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281}              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -373,22 +372,6 @@ async def send_to_moderation(text: str, reply_markup: Optional[InlineKeyboardMar
             await bot.send_message(MODERATION_CHAT_ID, text, reply_markup=reply_markup)
         except Exception:
             pass
-async def notify_staff(text: str):
-    sent = False
-    try:
-        await send_to_moderation(text)
-        sent = True
-    except Exception:
-        sent = False
-    # Также отправляем в ЛС всем администраторам и модераторам
-    try:
-        for rid in reviewer_ids():
-            try:
-                await bot.send_message(rid, text)
-            except Exception:
-                pass
-    except Exception:
-        pass
 
 async def create_invite_link() -> Optional[ChatInviteLink]:
     try:
@@ -1696,21 +1679,6 @@ async def on_new_user_delete(call: CallbackQuery):
         pass
     await call.answer("Удалён.")
 
-
-@dp.message(F.chat.id == CLAN_CHAT_ID, F.left_chat_member)
-async def on_user_left_clan_msg(message: Message):
-    member = message.left_chat_member
-    try:
-        if member.is_bot:
-            return
-    except Exception:
-        pass
-    uid = getattr(member, "id", None)
-    user = await get_user(uid) if uid else None
-    nickname = (user.get("nickname") if user and user.get("nickname") else getattr(member, "full_name", str(uid or "")))
-    uname = getattr(member, "username", None)
-    shown = f"{nickname} (@{uname})" if uname else f"{nickname}"
-    await notify_staff(f"Игрок \"{shown}\" вышел из клан-чата в Телеграмме")
 async def main():
     await init_db()
     await ensure_training_tables()
@@ -1725,7 +1693,7 @@ async def main():
     except Exception:
         pass
 
-    await dp.start_polling(bot, allowed_updates=["message","callback_query","chat_member","my_chat_member"])
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
