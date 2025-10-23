@@ -923,9 +923,9 @@ async def on_approve(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("reject:"))
     # Дополнительно: инструкции по тэгу и тренировочным серверам
-    await bot.send_message(
-        target_id,
-        "Необходимо поставить тег в игре: ❀[BBr]\n\nНазвания тренировочных серверов и пароли от них\nBlackberry | Training - Blackberries #1 0106\nBlackberry | Training- Strawberries #2 7848\nBlackberry | Training- Blueberries #3 9723\nBlackberry | Training- Cranberries #4 8831"
+        await bot.send_message(
+            target_id,
+            "Необходимо поставить тег в игре: ❀[BBr]\n\nНазвания тренировочных серверов и пароли от них\nBlackberry | Training - Blackberries #1 0106\nBlackberry | Training- Strawberries #2 7848\nBlackberry | Training- Blueberries #3 9723\nBlackberry | Training- Cranberries #4 8831"
     )
 
 async def on_reject(call: CallbackQuery):
