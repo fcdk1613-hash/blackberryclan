@@ -966,7 +966,6 @@ async def on_approve(call: CallbackQuery):
         "Blackberry | Training- Strawberries #2 7848\n"
         "Blackberry | Training- Blueberries #3 9723\n"
         "Blackberry | Training- Cranberries #4 8831"\n\n
-
         "Не забудьте обязательно подписаться:"\n
     )
 
