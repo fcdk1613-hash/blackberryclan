@@ -941,7 +941,7 @@ async def on_approve(call: CallbackQuery):
     await bot.send_message(
         target_id,
         "Необходимо поставить тег в игре: ❀[BBr]\n\n"
-        "4. Названия тренировочных серверов и пароли от них\n"
+        "Названия тренировочных серверов и пароли от них\n"
         "Blackberry | Training - Blackberries #1 0106\n"
         "Blackberry | Training- Strawberries #2 7848\n"
         "Blackberry | Training- Blueberries #3 9723\n"
