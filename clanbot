@@ -340,6 +340,26 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
             lines.append(f"{k}: {v}")
     return "\n".join(lines)
 
+
+def display_name(user: dict | None, fallback_fullname: str | None = None) -> str:
+    try:
+        nick = (user.get("nickname") if user else None) or (fallback_fullname or "")
+    except Exception:
+        nick = fallback_fullname or ""
+    uname = None
+    try:
+        tl = (user or {}).get("tg_link")
+        if tl:
+            tl = tl.strip()
+            if tl.startswith("https://t.me/") or tl.startswith("http://t.me/") or tl.startswith("t.me/"):
+                uname = tl.split("t.me/")[-1].strip("/ ")
+            elif tl.startswith("@"):
+                uname = tl[1:]
+    except Exception:
+        uname = None
+    return f"{nick} (@{uname})" if uname else nick
+
+
 # ======= HELPERS =======
 async def is_subscribed(user_id: int) -> bool:
     try:
@@ -941,7 +961,7 @@ async def on_approve(call: CallbackQuery):
     await bot.send_message(
         target_id,
         "Необходимо поставить тег в игре: ❀[BBr]\n\n"
-        "Названия тренировочных серверов и пароли от них\n"
+        "4. Названия тренировочных серверов и пароли от них\n"
         "Blackberry | Training - Blackberries #1 0106\n"
         "Blackberry | Training- Strawberries #2 7848\n"
         "Blackberry | Training- Blueberries #3 9723\n"
@@ -1706,6 +1726,59 @@ async def on_new_user_delete(call: CallbackQuery):
         pass
     await call.answer("Удалён.")
 
+
+async def check_recruit_promotion_candidates():
+    from datetime import datetime, timedelta
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    threshold = (today - timedelta(days=14)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, nickname, tg_link, joined_at FROM users "
+            "WHERE status = ? AND faction = ? AND joined_at IS NOT NULL AND date(joined_at) <= date(?)",
+            ("joined", "Рекрут", threshold)
+        )
+        rows = await cur.fetchall()
+    for uid, nickname, tg_link, joined_at in rows:
+        user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link, "joined_at": joined_at }
+        text = f"Игрок \"{display_name(user)}\" в клане 14 дней и может быть переведен в основной состав."
+        try:
+            await notify_staff(text)
+        except Exception:
+            for rid in reviewer_ids():
+                try:
+                    await bot.send_message(rid, text)
+                except Exception:
+                    pass
+
+async def check_birthdays_today():
+    from datetime import datetime
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    mm = f"{today.month:02d}"; dd = f"{today.day:02d}"
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, nickname, tg_link, birth_date FROM users "
+            "WHERE status = ? AND birth_date IS NOT NULL",
+            ("joined",)
+        )
+        rows = await cur.fetchall()
+    for uid, nickname, tg_link, birth_date in rows:
+        try:
+            bmm = birth_date[5:7]; bdd = birth_date[8:10]
+        except Exception:
+            continue
+        if bmm == mm and bdd == dd:
+            user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link }
+            text = f"Игрок \"{display_name(user)}\" сегодня отмечает день рождения!"
+            try:
+                await notify_staff(text)
+            except Exception:
+                for rid in reviewer_ids():
+                    try:
+                        await bot.send_message(rid, text)
+                    except Exception:
+                        pass
 async def main():
     await init_db()
     await ensure_training_tables()
@@ -1716,7 +1789,11 @@ async def main():
         scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
         scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
-        scheduler.start()
+        
+    # Daily checks: recruits 14d & birthdays (MSK)
+    scheduler.add_job(check_recruit_promotion_candidates, CronTrigger(hour=10, minute=0, timezone=ZoneInfo("Europe/Moscow")))
+    scheduler.add_job(check_birthdays_today, CronTrigger(hour=9, minute=0, timezone=ZoneInfo("Europe/Moscow")))
+scheduler.start()
     except Exception:
         pass
 
