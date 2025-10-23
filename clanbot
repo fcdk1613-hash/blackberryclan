@@ -38,7 +38,7 @@ CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
 ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
-MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281}              # {333}
+MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 7566533396}              # {333}
 
 DB_PATH = "blackberry_bot.db"
 
@@ -967,6 +967,8 @@ async def on_approve(call: CallbackQuery):
         "Blackberry | Training- Blueberries #3 9723\n"
         "Blackberry | Training- Cranberries #4 8831\n\n"
         "Не забудьте обязательно подписаться:\n"
+        "ИНФО Blackberry: https://t.me/+sL9VacfwkxYyYmUy\n"
+        "Дневник Blackberry: https://t.me/+QZJOj-3aiXowYjEy\n"
     )
 
 @dp.callback_query(F.data.startswith("reject:"))
