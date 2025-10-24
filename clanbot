@@ -724,6 +724,9 @@ async def on_profile_set_faction(call: CallbackQuery):
         await call.answer("Некорректные данные.", show_alert=True)
         return
     await upsert_user(target_id, faction=title)
+    # Уведомление игрока о смене фракции
+    await send_faction_notice(target_id, title)
+
     user = await get_user(target_id)
     try:
         await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id))
