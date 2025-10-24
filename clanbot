@@ -1367,6 +1367,11 @@ async def on_players_choose_faction(call: CallbackQuery):
     await call.message.edit_text("Выберите фракцию:", reply_markup=players_factions_kb(1))
     await call.answer()
 
+
+    # Уведомление игрока о смене фракции
+
+    await send_faction_notice(uid, faction)
+
 @dp.callback_query(F.data.startswith("players:"))
 async def on_players_list(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -1782,6 +1787,22 @@ async def check_birthdays_today():
                         await bot.send_message(rid, text)
                     except Exception:
                         pass
+
+async def send_faction_notice(user_id: int, faction: str):
+    texts = {
+        "Cranberry": "Твоя фракция изменена на Cranberry. Твой командир: Mukuru. Измени свой тэг на: ❀[BBa]",
+        "Blueberry": "Твоя фракция изменена на Blueberry. Твой командир: Buti. Измени свой тэг на: ❀[BBb]",
+        "Watermelon": "Твоя фракция изменена на Watermelon. Твой командир: Gadler. Измени свой тэг на: ❀[BBc]",
+        "Резерв": "Ты переведен в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
+    }
+    text = texts.get(faction)
+    if not text:
+        return
+    try:
+        await bot.send_message(user_id, text)
+    except Exception:
+        pass
+
 async def main():
     await init_db()
     await ensure_training_tables()
