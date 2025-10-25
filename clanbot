@@ -266,12 +266,12 @@ def phone_kb() -> ReplyKeyboardMarkup:
 def subscription_check_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🔔 Проверить подписку", callback_data="check_sub")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def apply_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📨 Отправить заявку", callback_data="send_apply")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -280,7 +280,7 @@ def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="✏️ Редактировать", callback_data=f"edit:init:{user_id}")
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -291,13 +291,13 @@ def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def approve_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
     kb.button(text="❌ Отклонить", callback_data=f"reject:{user_id}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -310,7 +310,7 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="Личный TG", callback_data=f"edit:field:{user_id}:tg_link")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 def pad_clan_id(v: Optional[int]) -> str:
     if not v:
         return "—"
@@ -441,7 +441,7 @@ def removal_kb(user_id: int, done_db: bool, done_tg: bool, done_discord: bool) -
         kb.button(text="🧹 Завершить — стереть из базы", callback_data=f"remove:final:{user_id}")
         kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 async def removal_state(user_id: int) -> tuple[bool, bool, bool]:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1169,7 +1169,7 @@ def stats_kb() -> InlineKeyboardMarkup:
     kb.button(text="За всё время", callback_data="stats:all")
     kb.button(text="CSV (вступившие 30д)", callback_data="export:joined:30d")
     kb.button(text="CSV (все за 30д)", callback_data="export:all:30d")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 @dp.message(F.text == "/stats")
 async def cmd_stats(message: Message):
@@ -1268,7 +1268,7 @@ def training_kb(date_str: str) -> InlineKeyboardMarkup:
     kb.button(text="Да", callback_data=f"train:yes:{date_str}")
     kb.button(text="Нет", callback_data=f"train:no:{date_str}")
     kb.button(text="Опоздаю", callback_data=f"train:late:{date_str}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -1280,7 +1280,7 @@ def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: boo
     kb.button(text=("• Все" if filter_type=="all" else "Все"), callback_data="players:all::1")
     kb.button(text=("• Вступили" if filter_type=="joined" else "Вступили"), callback_data="players:joined::1")
     kb.button(text=("• Фракции" if filter_type=="faction" else "Фракции"), callback_data=f"players:choose_faction::{page}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 def players_factions_kb(page: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -1291,7 +1291,7 @@ def players_factions_kb(page: int) -> InlineKeyboardMarkup:
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
     kb.button(text="⬅️ Назад (все)", callback_data="players:all::1")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 async def fetch_players(filter_type: str, filter_value: str, page: int):
     offset = (page-1)*PAGE_SIZE
@@ -1686,7 +1686,7 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
-    return kb.as_markup()
+    return kb.adjust(1).as_markup()
 
 @dp.message(Command("new"))
 async def cmd_new_users(message: Message):
