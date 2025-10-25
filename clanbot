@@ -5,6 +5,7 @@
 # Only item 2 (remove from Telegram clan chat) is automatic.
 import asyncio
 import logging
+import csv
 from datetime import datetime, timedelta, date
 from enum import Enum
 from typing import Optional, Tuple, List
