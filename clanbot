@@ -234,6 +234,9 @@ class AdminEdit(StatesGroup):
 class TrainingReason(StatesGroup):
     waiting_reason = State()
 
+class RejectReason(StatesGroup):
+    waiting_reason = State()
+
 
 # ======= BOT SETUP =======
 logging.basicConfig(level=logging.INFO)
@@ -991,13 +994,19 @@ async def on_approve(call: CallbackQuery):
         "Дневник Blackberry: https://t.me/+QZJOj-3aiXowYjEy\n"
     )
 
+
 @dp.callback_query(F.data.startswith("reject:"))
-async def on_reject(call: CallbackQuery):
+async def on_reject(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Только модераторы/администраторы могут отклонять заявки.", show_alert=True)
         return
 
-    target_id = int(call.data.split(":")[1])
+    try:
+        target_id = int(call.data.split(":")[1])
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
     user = await get_user(target_id)
     if not user:
         await call.answer("Пользователь не найден", show_alert=True)
@@ -1010,17 +1019,15 @@ async def on_reject(call: CallbackQuery):
         await call.answer("Заявка уже отклонена ранее.", show_alert=True)
         return
 
-    await upsert_user(target_id, status=Status.REJECTED.value)
-    await bot.send_message(target_id, "К сожалению, ваша заявка отклонена. Вы можете попробовать позже.")
-
+    # Ask moderator/admin for the rejection reason via FSM
+    await state.update_data(reject_user_id=target_id, reject_msg_id=call.message.message_id, reject_chat_id=call.message.chat.id)
     try:
-        await call.message.edit_text(call.message.text + "\n\n❌ Отклонено")
+        await call.message.answer("Укажите причину отклонения (одним сообщением). Она будет отправлена пользователю.")
     except Exception:
         pass
-    await call.answer("Отклонено ❌")
-    await notify_review_outcome(target_id, "rejected")
+    await state.set_state(RejectReason.waiting_reason)
+    await call.answer()
 
-# ======= Profile & Join Announce =======
 @dp.message(or_f(F.text == "/profile", F.text == "profile"))
 async def cmd_profile(message: Message):
     user = await get_user(message.from_user.id)
@@ -1849,3 +1856,46 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
+
+@dp.message(RejectReason.waiting_reason)
+async def on_reject_reason(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("reject_user_id")
+    if not target_id:
+        await message.answer("Сессия отклонения не найдена. Нажмите заново кнопку «Отклонить».")
+        await state.clear()
+        return
+
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.answer("Пожалуйста, укажите причину текстом.")
+        return
+
+    # Update status to REJECTED
+    await upsert_user(target_id, status=Status.REJECTED.value)
+
+    # Notify applicant with the reason
+    try:
+        await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.\nПричина: {reason}")
+    except Exception:
+        pass
+
+    # Update moderator's card text
+    try:
+        await bot.edit_message_text(
+            chat_id=data.get("reject_chat_id"),
+            message_id=data.get("reject_msg_id"),
+            text=( "❌ Отклонено\nПричина: " + reason )
+        )
+    except Exception:
+        pass
+
+    # Notify all reviewers about the outcome
+    try:
+        await notify_review_outcome(target_id, "rejected")
+    except Exception:
+        pass
+
+    await message.answer("Отклонение зафиксировано и отправлено пользователю.")
+    await state.clear()
