@@ -227,14 +227,14 @@ class RegStates(StatesGroup):
     waiting_tz = State()
     waiting_tg_link = State()
 
+class RejectReason(StatesGroup):
+    waiting_reason = State()
+
 
 class AdminEdit(StatesGroup):
     waiting_value = State()
 
 class TrainingReason(StatesGroup):
-    waiting_reason = State()
-
-class RejectReason(StatesGroup):
     waiting_reason = State()
 
 
@@ -997,35 +997,43 @@ async def on_approve(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("reject:"))
 async def on_reject(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+    try:
+        allowed = set(ADMIN_IDS) | set(MODERATOR_IDS)
+    except Exception:
+        allowed = set(ADMIN_IDS)
+    if call.from_user.id not in allowed:
         await call.answer("Только модераторы/администраторы могут отклонять заявки.", show_alert=True)
         return
 
     try:
         target_id = int(call.data.split(":")[1])
     except Exception:
-        await call.answer("Некорректные данные.", show_alert=True)
+        await call.answer("Некорректные данные заявки.", show_alert=True)
         return
 
     user = await get_user(target_id)
     if not user:
-        await call.answer("Пользователь не найден", show_alert=True)
+        await call.answer("Пользователь не найден.", show_alert=True)
         return
-
-    if user.get("status") in (Status.APPROVED.value, Status.JOINED.value):
+    status = user.get("status")
+    if status in (Status.APPROVED.value, Status.JOINED.value):
         await call.answer("Пользователь уже одобрен/вступил.", show_alert=True)
         return
-    if user.get("status") == Status.REJECTED.value:
+    if status == Status.REJECTED.value:
         await call.answer("Заявка уже отклонена ранее.", show_alert=True)
         return
 
-    # Ask moderator/admin for the rejection reason via FSM
-    await state.update_data(reject_user_id=target_id, reject_msg_id=call.message.message_id, reject_chat_id=call.message.chat.id)
+    await state.update_data(
+        reject_user_id=target_id,
+        reject_msg_id=call.message.message_id,
+        reject_chat_id=call.message.chat.id,
+        reject_by=call.from_user.id,
+    )
+    await state.set_state(RejectReason.waiting_reason)
     try:
         await call.message.answer("Укажите причину отклонения (одним сообщением). Она будет отправлена пользователю.")
     except Exception:
         pass
-    await state.set_state(RejectReason.waiting_reason)
     await call.answer()
 
 @dp.message(or_f(F.text == "/profile", F.text == "profile"))
@@ -1862,9 +1870,14 @@ if __name__ == "__main__":
 async def on_reject_reason(message: Message, state: FSMContext):
     data = await state.get_data()
     target_id = data.get("reject_user_id")
+    started_by = data.get("reject_by")
     if not target_id:
-        await message.answer("Сессия отклонения не найдена. Нажмите заново кнопку «Отклонить».")
+        await message.answer("Сессия отклонения не найдена. Нажмите кнопку «Отклонить» ещё раз.")
         await state.clear()
+        return
+
+    if started_by and message.from_user.id != started_by:
+        await message.answer("Эту причину должен ввести модератор, начавший отклонение.")
         return
 
     reason = (message.text or "").strip()
@@ -1872,26 +1885,22 @@ async def on_reject_reason(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, укажите причину текстом.")
         return
 
-    # Update status to REJECTED
     await upsert_user(target_id, status=Status.REJECTED.value)
 
-    # Notify applicant with the reason
     try:
         await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.\nПричина: {reason}")
     except Exception:
         pass
 
-    # Update moderator's card text
     try:
         await bot.edit_message_text(
             chat_id=data.get("reject_chat_id"),
             message_id=data.get("reject_msg_id"),
-            text=( "❌ Отклонено\nПричина: " + reason )
+            text=("❌ Отклонено\nПричина: " + reason)
         )
     except Exception:
         pass
 
-    # Notify all reviewers about the outcome
     try:
         await notify_review_outcome(target_id, "rejected")
     except Exception:
@@ -1899,3 +1908,4 @@ async def on_reject_reason(message: Message, state: FSMContext):
 
     await message.answer("Отклонение зафиксировано и отправлено пользователю.")
     await state.clear()
+
