@@ -5,7 +5,6 @@
 # Only item 2 (remove from Telegram clan chat) is automatic.
 import asyncio
 import logging
-import csv
 from datetime import datetime, timedelta, date
 from enum import Enum
 from typing import Optional, Tuple, List
@@ -470,41 +469,6 @@ def removal_text(user: Optional[dict], done_db: bool, done_tg: bool, done_discor
     return "\n".join(lines)
 
 # ======= HANDLERS =======
-
-@dp.message(Command("not_in_bot"))
-async def cmd_not_in_bot(message: Message):
-    await ensure_chat_members_table()
-    try:
-        allowed = set(ADMIN_IDS) | set(MODERATOR_IDS)
-    except Exception:
-        allowed = set(ADMIN_IDS)
-    if message.from_user.id not in allowed:
-        await message.answer("⛔ Доступ только для модераторов и администраторов.")
-        return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """
-            SELECT cm.user_id, cm.username, cm.full_name
-            FROM chat_members cm
-            LEFT JOIN users u ON u.user_id = cm.user_id
-            WHERE cm.chat_id = ? AND u.user_id IS NULL
-            ORDER BY LOWER(COALESCE(cm.username, cm.full_name)) ASC
-            """, (CLAN_CHAT_ID,)
-        )
-        rows = await cur.fetchall()
-    fname = f"not_in_bot_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
-    with open(fname, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["username", "user_id", "full_name"])
-        for uid, username, full_name in rows:
-            uname = f"@{username}" if username else ""
-            w.writerow([uname, uid, full_name or ""])
-    caption = f"Не в боте: {len(rows)} чел."
-    try:
-        await message.answer_document(FSInputFile(fname), caption=caption)
-    except Exception:
-        await message.answer(caption + "\nФайл не удалось отправить.")
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     user = await get_user(message.from_user.id)
@@ -1842,50 +1806,6 @@ async def send_faction_notice(user_id: int, faction: str):
     except Exception:
         pass
 
-
-async def ensure_chat_members_table():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS chat_members (
-            chat_id    INTEGER NOT NULL,
-            user_id    INTEGER NOT NULL,
-            username   TEXT,
-            full_name  TEXT,
-            joined_at  TEXT,
-            PRIMARY KEY (chat_id, user_id)
-        )
-        """)
-        await db.commit()
-
-
-@dp.chat_member(F.chat.id == CLAN_CHAT_ID)
-async def track_clan_chat_members(event: ChatMemberUpdated):
-    chat_id = event.chat.id
-    target = event.new_chat_member.user
-    if getattr(target, "is_bot", False):
-        return
-    new_status = event.new_chat_member.status
-    became_member = new_status in ("member", "administrator", "creator")
-    left_or_kicked = new_status in ("left", "kicked")
-    async with aiosqlite.connect(DB_PATH) as db:
-        if became_member:
-            await db.execute(
-                """INSERT OR REPLACE INTO chat_members (chat_id, user_id, username, full_name, joined_at)
-                       VALUES (?, ?, ?, ?, COALESCE(
-                           (SELECT joined_at FROM chat_members WHERE chat_id=? AND user_id=?),
-                           ?
-                       ))""",
-                (
-                    chat_id, target.id, target.username, target.full_name,
-                    chat_id, target.id,
-                    datetime.utcnow().isoformat(timespec="seconds"),
-                )
-            )
-            await db.commit()
-        elif left_or_kicked:
-            await db.execute("DELETE FROM chat_members WHERE chat_id=? AND user_id=?", (chat_id, target.id))
-            await db.commit()
-
 async def main():
     await init_db()
     await ensure_training_tables()
@@ -1905,7 +1825,7 @@ async def main():
     except Exception:
         pass
 
-    await dp.start_polling(bot, allowed_updates=["message","callback_query","chat_member","my_chat_member"])
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
