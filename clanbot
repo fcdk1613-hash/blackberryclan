@@ -472,6 +472,7 @@ def removal_text(user: Optional[dict], done_db: bool, done_tg: bool, done_discor
 
 @dp.message(Command("not_in_bot"))
 async def cmd_not_in_bot(message: Message):
+    await ensure_chat_members_table()
     try:
         allowed = set(ADMIN_IDS) | set(MODERATOR_IDS)
     except Exception:
