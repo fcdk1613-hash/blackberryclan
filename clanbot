@@ -1893,12 +1893,12 @@ async def on_reject_reason(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # В группе принимаем только ответ на наше приглашение; в личке — любое сообщение
+    # В группе принимаем только ответ на наш ForceReply; в ЛС — любое сообщение
     if message.chat.type != "private":
         if not message.reply_to_message or (prompt_id and message.reply_to_message.message_id != prompt_id):
             return
 
-    # Только модератор, начавший отклонение
+    # только модератор, начавший отклонение
     if started_by and message.from_user.id != started_by:
         await message.answer("Эту причину должен ввести модератор, начавший отклонение.")
         return
@@ -1908,26 +1908,30 @@ async def on_reject_reason(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, укажите причину текстом.")
         return
 
-    # Фиксируем отказ
+    # ставим REJECTED
     await upsert_user(target_id, status=Status.REJECTED.value)
 
-    # Сообщаем игроку
+    # игроку — причина
     try:
         await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.\nПричина: {reason}")
     except Exception:
         pass
 
-    # Обновляем карточку модерации
+    # обновляем карточку модерации, затем удаляем её
     try:
         await bot.edit_message_text(
             chat_id=mod_chat_id,
             message_id=data.get("reject_msg_id"),
             text="❌ Отклонено\nПричина: " + reason
-        )
+)
+    except Exception:
+        pass
+    try:
+        await bot.delete_message(mod_chat_id, data.get("reject_msg_id"))
     except Exception:
         pass
 
-    # Уведомление рецензентов
+    # уведомление рецензентам (как у тебя уже есть)
     try:
         await notify_review_outcome(target_id, "rejected")
     except Exception:
