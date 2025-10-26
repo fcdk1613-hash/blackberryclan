@@ -13,7 +13,6 @@ import aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -996,7 +995,6 @@ async def on_approve(call: CallbackQuery):
     )
 
 
-
 @dp.callback_query(F.data.startswith("reject:"))
 async def on_reject(call: CallbackQuery, state: FSMContext):
     try:
@@ -1017,7 +1015,6 @@ async def on_reject(call: CallbackQuery, state: FSMContext):
     if not user:
         await call.answer("Пользователь не найден.", show_alert=True)
         return
-
     status = user.get("status")
     if status in (Status.APPROVED.value, Status.JOINED.value):
         await call.answer("Пользователь уже одобрен/вступил.", show_alert=True)
@@ -1869,8 +1866,7 @@ if __name__ == "__main__":
         print("Bot stopped.")
 
 
-
-@dp.message(StateFilter(RejectReason.waiting_reason), F.text)
+@dp.message(RejectReason.waiting_reason)
 async def on_reject_reason(message: Message, state: FSMContext):
     data = await state.get_data()
     target_id = data.get("reject_user_id")
@@ -1892,8 +1888,7 @@ async def on_reject_reason(message: Message, state: FSMContext):
     await upsert_user(target_id, status=Status.REJECTED.value)
 
     try:
-        await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.
-Причина: {reason}")
+        await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.\nПричина: {reason}")
     except Exception:
         pass
 
@@ -1901,8 +1896,7 @@ async def on_reject_reason(message: Message, state: FSMContext):
         await bot.edit_message_text(
             chat_id=data.get("reject_chat_id"),
             message_id=data.get("reject_msg_id"),
-            text=("❌ Отклонено
-Причина: " + reason)
+            text=("❌ Отклонено\nПричина: " + reason)
         )
     except Exception:
         pass
@@ -1914,3 +1908,4 @@ async def on_reject_reason(message: Message, state: FSMContext):
 
     await message.answer("Отклонение зафиксировано и отправлено пользователю.")
     await state.clear()
+
