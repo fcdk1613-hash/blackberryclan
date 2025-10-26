@@ -13,10 +13,8 @@ import aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ForceReply
 from aiogram.types import (
     ChatMemberUpdated,
     Message,
@@ -228,9 +226,6 @@ class RegStates(StatesGroup):
     waiting_birthdate = State()
     waiting_tz = State()
     waiting_tg_link = State()
-
-class RejectReason(StatesGroup):
-    waiting_reason = State()
 
 
 class AdminEdit(StatesGroup):
@@ -996,58 +991,36 @@ async def on_approve(call: CallbackQuery):
         "Дневник Blackberry: https://t.me/+QZJOj-3aiXowYjEy\n"
     )
 
-
-
-
 @dp.callback_query(F.data.startswith("reject:"))
-async def on_reject(call: CallbackQuery, state: FSMContext):
-    try:
-        allowed = set(ADMIN_IDS) | set(MODERATOR_IDS)
-    except Exception:
-        allowed = set(ADMIN_IDS)
-    if call.from_user.id not in allowed:
+async def on_reject(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Только модераторы/администраторы могут отклонять заявки.", show_alert=True)
         return
 
-    try:
-        target_id = int(call.data.split(":")[1])
-    except Exception:
-        await call.answer("Некорректные данные заявки.", show_alert=True)
-        return
-
+    target_id = int(call.data.split(":")[1])
     user = await get_user(target_id)
     if not user:
-        await call.answer("Пользователь не найден.", show_alert=True)
+        await call.answer("Пользователь не найден", show_alert=True)
         return
 
-    status = user.get("status")
-    if status in (Status.APPROVED.value, Status.JOINED.value):
+    if user.get("status") in (Status.APPROVED.value, Status.JOINED.value):
         await call.answer("Пользователь уже одобрен/вступил.", show_alert=True)
         return
-    if status == Status.REJECTED.value:
+    if user.get("status") == Status.REJECTED.value:
         await call.answer("Заявка уже отклонена ранее.", show_alert=True)
         return
 
-    await state.update_data(
-        reject_user_id=target_id,
-        reject_msg_id=call.message.message_id,
-        reject_chat_id=call.message.chat.id,
-        reject_by=call.from_user.id,
-    )
-    await state.set_state(RejectReason.waiting_reason)
+    await upsert_user(target_id, status=Status.REJECTED.value)
+    await bot.send_message(target_id, "К сожалению, ваша заявка отклонена. Вы можете попробовать позже.")
 
-    if call.message.chat.type == "private":
-        await call.message.answer("Укажите причину отклонения (одним сообщением).")
-        await state.update_data(reject_prompt_id=None)
-    else:
-        prompt = await call.message.answer(
-            "Укажите причину отклонения (одним сообщением). Ответьте на это сообщение.",
-            reply_markup=ForceReply(selective=True),
-        )
-        await state.update_data(reject_prompt_id=prompt.message_id)
+    try:
+        await call.message.edit_text(call.message.text + "\n\n❌ Отклонено")
+    except Exception:
+        pass
+    await call.answer("Отклонено ❌")
+    await notify_review_outcome(target_id, "rejected")
 
-    await call.answer()
-
+# ======= Profile & Join Announce =======
 @dp.message(or_f(F.text == "/profile", F.text == "profile"))
 async def cmd_profile(message: Message):
     user = await get_user(message.from_user.id)
@@ -1876,66 +1849,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
-
-
-
-@dp.message(StateFilter(RejectReason.waiting_reason), F.text)
-async def on_reject_reason(message: Message, state: FSMContext):
-    data = await state.get_data()
-    target_id = data.get("reject_user_id")
-    started_by = data.get("reject_by")
-    prompt_id = data.get("reject_prompt_id")
-    mod_chat_id = data.get("reject_chat_id")
-
-    if not target_id:
-        await message.answer("Сессия отклонения не найдена. Нажмите кнопку «Отклонить» ещё раз.")
-        await state.clear()
-        return
-
-    # В группе принимаем только ответ на наш ForceReply; в ЛС — любое сообщение
-    if message.chat.type != "private":
-        if not message.reply_to_message or (prompt_id and message.reply_to_message.message_id != prompt_id):
-            return
-
-    # только модератор, начавший отклонение
-    if started_by and message.from_user.id != started_by:
-        await message.answer("Эту причину должен ввести модератор, начавший отклонение.")
-        return
-
-    reason = (message.text or "").strip()
-    if not reason:
-        await message.answer("Пожалуйста, укажите причину текстом.")
-        return
-
-    # ставим REJECTED
-    await upsert_user(target_id, status=Status.REJECTED.value)
-
-    # игроку — причина
-    try:
-        await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.\nПричина: {reason}")
-    except Exception:
-        pass
-
-    # обновляем карточку модерации, затем удаляем её
-    try:
-        await bot.edit_message_text(
-            chat_id=mod_chat_id,
-            message_id=data.get("reject_msg_id"),
-            text="❌ Отклонено\nПричина: " + reason
-)
-    except Exception:
-        pass
-    try:
-        await bot.delete_message(mod_chat_id, data.get("reject_msg_id"))
-    except Exception:
-        pass
-
-    # уведомление рецензентам (как у тебя уже есть)
-    try:
-        await notify_review_outcome(target_id, "rejected")
-    except Exception:
-        pass
-
-    await message.answer("Отклонение зафиксировано и отправлено пользователю.")
-    await state.clear()
