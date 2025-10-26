@@ -1823,6 +1823,135 @@ async def send_faction_notice(user_id: int, faction: str):
     except Exception:
         pass
 
+
+# ==== Manual moderation commands (/accept, /reject) ====
+
+@dp.message(Command("accept"))
+async def cmd_accept(message: Message):
+    # Only admins/moderators
+    try:
+        allowed = set(ADMIN_IDS) | set(MODERATOR_IDS)
+    except Exception:
+        allowed = set(ADMIN_IDS)
+    if message.from_user.id not in allowed:
+        await message.answer("⛔ Доступ только для модераторов и администраторов.")
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Использование: /accept <tg_id>")
+        return
+
+    target_id = int(parts[1])
+    user = await get_user(target_id)
+    if not user:
+        await message.answer("Пользователь не найден в базе бота.")
+        return
+
+    # Already processed states
+    st = user.get("status")
+    if st == Status.REJECTED.value:
+        await message.answer("Заявка этого пользователя ранее уже отклонена.")
+        return
+    if st in (Status.APPROVED.value, Status.JOINED.value):
+        await message.answer("Этот пользователь уже одобрен или вступил.")
+        return
+
+    # Optional: check profile completeness if функция доступна
+    try:
+        ok = await is_profile_complete(target_id)
+    except Exception:
+        ok = True
+    if not ok:
+        await message.answer("Анкета пользователя заполнена не полностью — одобрение невозможно.")
+        return
+
+    # Set APPROVED and default faction if empty
+    faction = user.get("faction") or "Рекрут"
+    await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
+    await ensure_joined_if_member(target_id)
+
+    link = await create_invite_link()
+    if not link:
+        await message.answer("Одобрено, но ссылку создать не удалось — проверьте права бота в клан-чате.")
+    else:
+        try:
+            await bot.send_message(
+                target_id,
+                f"Ваша заявка одобрена!\nФракция: {faction}\nСсылка для вступления в чат клана: {link.invite_link}"
+            )
+        except Exception:
+            pass
+
+        # Дополнительные инструкции как при кнопке «Одобрить»
+        try:
+            await bot.send_message(
+                target_id,
+                "Необходимо поставить тег в игре: ❀[BBr]\n\n"
+                "Названия тренировочных серверов и пароли от них\n"
+                "Blackberry | Training - Blackberries #1 0106\n"
+                "Blackberry | Training- Strawberries #2 7848\n"
+                "Blackberry | Training- Blueberries #3 9723\n"
+                "Blackberry | Training- Cranberries #4 8831\n\n"
+                "Не забудьте обязательно подписаться:\n"
+                "ИНФО Blackberry: https://t.me/+sL9VacfwkxYyYmUy\n"
+                "Дневник Blackberry: https://t.me/+QZJOj-3aiXowYjEy\n"
+            )
+        except Exception:
+            pass
+
+    try:
+        await notify_review_outcome(target_id, "approved")
+    except Exception:
+        pass
+
+    await message.answer(f"Пользователь {target_id} одобрен (статус APPROVED).")
+
+@dp.message(Command("reject"))
+async def cmd_reject(message: Message):
+    # Only admins/moderators
+    try:
+        allowed = set(ADMIN_IDS) | set(MODERATOR_IDS)
+    except Exception:
+        allowed = set(ADMIN_IDS)
+    if message.from_user.id not in allowed:
+        await message.answer("⛔ Доступ только для модераторов и администраторов.")
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Использование: /reject <tg_id>")
+        return
+
+    target_id = int(parts[1])
+    user = await get_user(target_id)
+    if not user:
+        await message.answer("Пользователь не найден в базе бота.")
+        return
+
+    st = user.get("status")
+    if st in (Status.APPROVED.value, Status.JOINED.value):
+        await message.answer("Пользователь уже одобрен/вступил.")
+        return
+    if st == Status.REJECTED.value:
+        await message.answer("Заявка уже отклонена ранее.")
+        return
+
+    await upsert_user(target_id, status=Status.REJECTED.value)
+
+    try:
+        await bot.send_message(target_id, "К сожалению, ваша заявка отклонена.")
+    except Exception:
+        pass
+
+    try:
+        await notify_review_outcome(target_id, "rejected")
+    except Exception:
+        pass
+
+    await message.answer(f"Заявка пользователя {target_id} отклонена.")
+
+
 async def main():
     await init_db()
     await ensure_training_tables()
