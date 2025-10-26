@@ -1900,8 +1900,7 @@ async def on_reject_reason(message: Message, state: FSMContext):
         await bot.edit_message_text(
             chat_id=data.get("reject_chat_id"),
             message_id=data.get("reject_msg_id"),
-            text=("❌ Отклонено
-Причина: " + reason)
+            text=("❌ Отклонено. Причина: " + reason)
         )
     except Exception:
         pass
