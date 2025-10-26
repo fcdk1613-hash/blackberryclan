@@ -17,6 +17,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+from aiogram.types import ForceReply
     ChatMemberUpdated,
     Message,
     KeyboardButton,
@@ -997,6 +998,7 @@ async def on_approve(call: CallbackQuery):
 
 
 
+
 @dp.callback_query(F.data.startswith("reject:"))
 async def on_reject(call: CallbackQuery, state: FSMContext):
     try:
@@ -1033,10 +1035,17 @@ async def on_reject(call: CallbackQuery, state: FSMContext):
         reject_by=call.from_user.id,
     )
     await state.set_state(RejectReason.waiting_reason)
-    try:
-        await call.message.answer("Укажите причину отклонения (одним сообщением). Она будет отправлена пользователю.")
-    except Exception:
-        pass
+
+    if call.message.chat.type == "private":
+        await call.message.answer("Укажите причину отклонения (одним сообщением).")
+        await state.update_data(reject_prompt_id=None)
+    else:
+        prompt = await call.message.answer(
+            "Укажите причину отклонения (одним сообщением). Ответьте на это сообщение.",
+            reply_markup=ForceReply(selective=True),
+        )
+        await state.update_data(reject_prompt_id=prompt.message_id)
+
     await call.answer()
 
 @dp.message(or_f(F.text == "/profile", F.text == "profile"))
@@ -1870,16 +1879,26 @@ if __name__ == "__main__":
 
 
 
+
 @dp.message(StateFilter(RejectReason.waiting_reason), F.text)
 async def on_reject_reason(message: Message, state: FSMContext):
     data = await state.get_data()
     target_id = data.get("reject_user_id")
     started_by = data.get("reject_by")
+    prompt_id = data.get("reject_prompt_id")
+    mod_chat_id = data.get("reject_chat_id")
+
     if not target_id:
         await message.answer("Сессия отклонения не найдена. Нажмите кнопку «Отклонить» ещё раз.")
         await state.clear()
         return
 
+    # В группе принимаем только ответ на наше приглашение; в личке — любое сообщение
+    if message.chat.type != "private":
+        if not message.reply_to_message or (prompt_id and message.reply_to_message.message_id != prompt_id):
+            return
+
+    # Только модератор, начавший отклонение
     if started_by and message.from_user.id != started_by:
         await message.answer("Эту причину должен ввести модератор, начавший отклонение.")
         return
@@ -1889,22 +1908,26 @@ async def on_reject_reason(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, укажите причину текстом.")
         return
 
+    # Фиксируем отказ
     await upsert_user(target_id, status=Status.REJECTED.value)
 
+    # Сообщаем игроку
     try:
-        await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена. Причина: {reason}")
+        await bot.send_message(target_id, f"К сожалению, ваша заявка отклонена.\nПричина: {reason}")
     except Exception:
         pass
 
+    # Обновляем карточку модерации
     try:
         await bot.edit_message_text(
-            chat_id=data.get("reject_chat_id"),
+            chat_id=mod_chat_id,
             message_id=data.get("reject_msg_id"),
-            text=("❌ Отклонено. Причина: " + reason)
+            text="❌ Отклонено\nПричина: " + reason
         )
     except Exception:
         pass
 
+    # Уведомление рецензентов
     try:
         await notify_review_outcome(target_id, "rejected")
     except Exception:
