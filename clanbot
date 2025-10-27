@@ -1,13 +1,4 @@
 
-def tz_choice_kb() -> ReplyKeyboardMarkup:
-    # Кнопки вертикально, от MSK-3 до MSK+7
-    rows = [[KeyboardButton(text=label)] for label in ["MSK-3","MSK-2","MSK-1","MSK","MSK+1","MSK+2","MSK+3","MSK+4","MSK+5","MSK+6","MSK+7"]]
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        one_time_keyboard=True,
-        input_field_placeholder="Выберите ваш часовой пояс"
-    )
 # main.py
 # aiogram 3.x bot for Blackberry clan onboarding
 # Adds: internal ClanID, DM review, factions, DOB. Reports/CSV.
@@ -562,6 +553,15 @@ async def got_birthdate(message: Message, state: FSMContext):
     await message.answer(f"✅ Принято. Ваш возраст: {age}.\nВыберите ваш часовой пояс:", reply_markup=tz_choice_kb())
     await state.set_state(RegStates.waiting_tz)
 
+def tz_choice_kb() -> ReplyKeyboardMarkup:
+    # Кнопки вертикально, от MSK-3 до MSK+7
+    rows = [[KeyboardButton(text=label)] for label in ["MSK-3","MSK-2","MSK-1","MSK","MSK+1","MSK+2","MSK+3","MSK+4","MSK+5","MSK+6","MSK+7"]]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Выберите ваш часовой пояс"
+    )
 
 @dp.message(RegStates.waiting_tz)
 async def got_tz(message: Message, state: FSMContext):
