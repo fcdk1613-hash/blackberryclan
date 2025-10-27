@@ -16,6 +16,7 @@ from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+from aiogram.exceptions import TelegramBadRequest
     ChatMemberUpdated,
     Message,
     KeyboardButton,
@@ -1572,27 +1573,43 @@ async def send_daily_training_poll():
         except Exception:
             continue
 
+
 @dp.callback_query(F.data.startswith("train:"))
 async def on_training_answer(call: CallbackQuery, state: FSMContext):
+    # СРАЗУ подтверждаем callback, чтобы не словить timeout
+    try:
+        await call.answer()
+    except TelegramBadRequest:
+        pass
+
     try:
         _, choice, date_str = call.data.split(":")
     except ValueError:
-        await call.answer("Некорректные данные.", show_alert=True)
         return
+
     uid = call.from_user.id
+
     if choice == "yes":
         await save_training_response(uid, date_str, "yes", None)
         try:
             await call.message.edit_text(f"Ответ сохранён: <b>Да</b> на {date_str}")
+        except TelegramBadRequest:
+            try:
+                await call.message.answer(f"Ответ сохранён: <b>Да</b> на {date_str}")
+            except Exception:
+                pass
+        return
+
+    # 'no' и 'late' — просим причину
+    await state.update_data(train_choice=choice, train_date=date_str, train_chat_id=call.message.chat.id, train_msg_id=call.message.message_id)
+    try:
+        await call.message.answer("Введите причину:")
+    except TelegramBadRequest:
+        try:
+            await bot.send_message(uid, "Введите причину:")
         except Exception:
             pass
-        await call.answer()
-        return
-    # For 'no' and 'late' ask reason
-    await state.update_data(train_choice=choice, train_date=date_str, train_chat_id=call.message.chat.id, train_msg_id=call.message.message_id)
-    await call.message.answer("Введите причину:")
     await state.set_state(TrainingReason.waiting_reason)
-    await call.answer()
 
 @dp.message(TrainingReason.waiting_reason)
 async def on_training_reason(message: Message, state: FSMContext):
