@@ -37,7 +37,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
 MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 7566533396}              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -1950,6 +1950,61 @@ async def cmd_reject(message: Message):
         pass
 
     await message.answer(f"Заявка пользователя {target_id} отклонена.")
+
+
+
+# === Admin-only broadcast: /seed (excludes faction "Резерв") ===
+@dp.message(Command("seed"))
+async def cmd_seed(message: Message):
+    # Only administrators
+    try:
+        allowed = set(ADMIN_IDS)
+    except Exception:
+        allowed = set()
+    if message.from_user.id not in allowed:
+        await message.answer("⛔ Команда доступна только администраторам.")
+        return
+
+    seed_text = (
+        "Привет!\n"
+        "У нас все еще не полный сервер и нам необходимо, чтобы ты зашел на наш сервер [RU] Фруктовый сад. "
+        "Ты можешь просто зайти, выставить в настройках минимальное значение FPS и заниматься своими делами. "
+        "Или ты можешь зайти и тренировать свой скилл. \n\n"
+        "В любом случае, это очень важно, потому что нашему клану нужен полный сервер, где мы набираем игроков в наши ряды. \n"
+        "Будь с кланом, не игнорируй это сообщение. \n"
+        "Спасибо, друг!"
+    )
+
+    await message.answer("Запускаю рассылку сообщения всем участникам (кроме фракции 'Резерв')...")
+
+    sent = 0
+    failed = 0
+    ids = []
+
+    # выбираем всех пользователей, кроме фракции "Резерв"
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT DISTINCT user_id FROM users WHERE faction IS NULL OR faction != 'Резерв'"
+            )
+            rows = await cur.fetchall()
+            ids = [int(r[0]) for r in rows if r and r[0]]
+    except Exception as e:
+        await message.answer(f"Ошибка при получении списка пользователей: {e}")
+        return
+
+    # отправляем DM
+    for uid in ids:
+        try:
+            await bot.send_message(uid, seed_text)
+            sent += 1
+            # лёгкий троттлинг
+            import asyncio
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
+
+    await message.answer(f"Готово. Отправлено: {sent} | Не доставлено: {failed}.")
 
 
 async def main():
