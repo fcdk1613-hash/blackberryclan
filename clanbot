@@ -1,13 +1,3 @@
-
-def tz_choice_kb() -> ReplyKeyboardMarkup:
-    # Кнопки вертикально, от MSK-3 до MSK+7
-    rows = [[KeyboardButton(text=label)] for label in ["MSK-3","MSK-2","MSK-1","MSK","MSK+1","MSK+2","MSK+3","MSK+4","MSK+5","MSK+6","MSK+7"]]
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        one_time_keyboard=True,
-        input_field_placeholder="Выберите ваш часовой пояс"
-    )
 # main.py
 # aiogram 3.x bot for Blackberry clan onboarding
 # Adds: internal ClanID, DM review, factions, DOB. Reports/CSV.
@@ -560,22 +550,14 @@ async def got_birthdate(message: Message, state: FSMContext):
     age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
 
     await state.update_data(birth_date=birth_date.isoformat(), age=age)
-    await message.answer(f"✅ Принято. Ваш возраст: {age}.\nВыберите ваш часовой пояс:", reply_markup=tz_choice_kb())
+    await message.answer(f"✅ Принято. Ваш возраст: {age}.\nВведите часовой пояс (например, GMT+3 или Europe/Moscow):")
     await state.set_state(RegStates.waiting_tz)
-
 
 @dp.message(RegStates.waiting_tz)
 async def got_tz(message: Message, state: FSMContext):
-    choice = (message.text or "").strip()
-    allowed = ["MSK-3","MSK-2","MSK-1","MSK","MSK+1","MSK+2","MSK+3","MSK+4","MSK+5","MSK+6","MSK+7"]
-    if choice not in allowed:
-        await message.answer("Пожалуйста, выберите один из вариантов на клавиатуре.", reply_markup=tz_choice_kb())
-        return
-    await state.update_data(timezone=choice)
-    await message.answer("Введите ссылку на ваш личный Telegram (например, https://t.me/username или @username):", reply_markup=ReplyKeyboardRemove())
+    await state.update_data(timezone=message.text.strip())
+    await message.answer("Введите ссылку на ваш личный Telegram (например, https://t.me/username или @username):")
     await state.set_state(RegStates.waiting_tg_link)
-
-@dp.message(RegStates.waiting_tg_link)
 
 @dp.message(RegStates.waiting_tg_link)
 async def got_tg_link(message: Message, state: FSMContext):
