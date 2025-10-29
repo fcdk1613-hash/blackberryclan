@@ -15,8 +15,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
+from aiogram.exceptions import TelegramBadRequest
     ChatMemberUpdated,
     Message,
     KeyboardButton,
@@ -2065,3 +2065,63 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
+@dp.message(Command("train_stats"))
+async def cmd_train_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+
+    from zoneinfo import ZoneInfo
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    date_str = today.isoformat()
+
+    # Подсчёты ответов за дату
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT response, COUNT(*) FROM training_attendance WHERE date=? GROUP BY response", (date_str,))
+        rows = await cur.fetchall()
+        counts = {"yes": 0, "no": 0, "late": 0}
+        for resp, cnt in rows:
+            if resp in counts:
+                counts[resp] = cnt
+
+        # Все вступившие игроки
+        cur = await db.execute("SELECT user_id, nickname, tg_link FROM users WHERE status = ?", ("joined",))
+        joined_users = await cur.fetchall()
+        all_joined_ids = [u[0] for u in joined_users]
+
+        # Пользователи, которые ответили (любым ответом)
+        cur = await db.execute("SELECT DISTINCT user_id FROM training_attendance WHERE date=?", (date_str,))
+        answered_ids = {r[0] for r in await cur.fetchall()}
+
+    not_answered = [row for row in joined_users if row[0] not in answered_ids]
+    not_answered_count = len(not_answered)
+    total_joined = len(all_joined_ids)
+
+    # Готовим CSV со списком не ответивших
+    csv_name = f"not_answered_{date_str}.csv"
+    import csv
+    with open(csv_name, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Nickname", "Username (tg_link)"])
+        for uid, nick, link in not_answered:
+            uname = username_from_tglink(link)
+            writer.writerow([nick or "-", uname or "-"])
+
+    text = (
+        f"<b>Статистика ответов за {date_str}</b>\\n"
+        f"✅ Да: {counts['yes']}\\n"
+        f"❌ Нет: {counts['no']}\\n"
+        f"⏰ Опоздаю: {counts['late']}\\n"
+        f"⁉️ Не ответили: {not_answered_count} из {total_joined}"
+    )
+    await message.answer(text)
+    try:
+        await message.answer_document(FSInputFile(csv_name), caption="Не ответили (CSV)")
+    except Exception:
+        # В случае ошибки пробуем как файл
+        try:
+            await bot.send_document(message.chat.id, FSInputFile(csv_name))
+        except Exception:
+            pass
