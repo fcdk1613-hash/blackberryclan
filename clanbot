@@ -1528,24 +1528,7 @@ async def check_training_inactive_3days():
             user = None
         nickname = user.get("nickname") if user else None
         headline = f"Внимание! Игрок {nickname} (ID: {uid}) не выходит на связь в течение 3 дней" if nickname else f"Внимание! Игрок ID: {uid} не выходит на связь в течение 3 дней"
-        sent = False
-        # Prefer existing moderation notifier if present
-        try:
-            await send_to_moderation(headline)
-            sent = True
-        except Exception:
-            sent = False
-        if not sent:
-            # Fallback: notify all admins and moderators
-            try:
-                all_ids = list(ADMIN_IDS | MODERATOR_IDS)
-                for mid in all_ids:
-                    try:
-                        await bot.send_message(mid, headline)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        await notify_staff(headline)
 
 async def save_training_response(user_id: int, date_str: str, response: str, reason: str | None):
     now_iso = datetime.utcnow().isoformat()
