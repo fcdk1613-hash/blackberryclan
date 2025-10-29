@@ -38,7 +38,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
 MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 7566533396}              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -1653,91 +1653,132 @@ async def fetch_training_stats(date_from: str, date_to: str | None = None):
             rows = await cur.fetchall()
             return {"single": False, "rows": rows}
 
+
+
+
 @dp.message(Command("train_stats"))  # /train_stats [YYYY-MM-DD] or /train_stats YYYY-MM-DD YYYY-MM-DD
 async def cmd_train_stats(message: Message):
-    if message.from_user.id not in (ADMIN_IDS):
-        await message.answer("Только администраторы.")
+    # Access: keep same as before — only admins (or add moderators if needed)
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
         return
-    args = message.text.split(maxsplit=1)
-    if len(args) == 1:
-        # default: today (Moscow)
+
+    # Parse arguments
+    tail = (message.text or "").split(maxsplit=1)
+    dates = []
+    if len(tail) > 1:
+        dates = [t for t in tail[1].strip().split() if t]
+
+    from zoneinfo import ZoneInfo
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date().isoformat()
+
+    def valid_date(s: str) -> bool:
         try:
-            msk = ZoneInfo("Europe/Moscow")
-            d = datetime.now(msk).date().isoformat()
+            datetime.strptime(s, "%Y-%m-%d")
+            return True
         except Exception:
-            d = datetime.utcnow().date().isoformat()
-        res = await fetch_training_stats(d)
-    else:
-        arg = args[1].strip()
-        if " " in arg or ":" in arg:
-            for sep in (":", " "):
-                if sep in arg:
-                    date_from, date_to = [x.strip() for x in arg.split(sep, 1)]
-                    break
-            res = await fetch_training_stats(date_from, date_to)
-        else:
-            res = await fetch_training_stats(arg)
+            return False
 
-    if res.get("single"):
-        d = res["date"]
-        agg = res.get("agg", {})
-        yes = agg.get("yes", 0); no = agg.get("no", 0); late = agg.get("late", 0)
-        lines = [f"<b>Статистика тренировки на {d}</b>", f"Да: {yes} • Нет: {no} • Опоздаю: {late}"]
-        details = res.get("details", [])
+    # Decide mode
+    if len(dates) == 0:
+        date_from = today
+        date_to = None
+    elif len(dates) == 1 and valid_date(dates[0]):
+        date_from = dates[0]
+        date_to = None
+    elif len(dates) >= 2 and valid_date(dates[0]) and valid_date(dates[1]):
+        date_from = dates[0]
+        date_to = dates[1]
+    else:
+        await message.answer("Использование: /train_stats [YYYY-MM-DD] или /train_stats YYYY-MM-DD YYYY-MM-DD")
+        return
+
+    # SINGLE-DAY: show detailed stats incl. 'Не ответили' and CSV
+    if not date_to:
+        date_str = date_from
+        async with aiosqlite.connect(DB_PATH) as db:
+            # aggregate yes/no/late
+            cur = await db.execute("SELECT response, COUNT(*) FROM training_attendance WHERE date=? GROUP BY response", (date_str,))
+            agg = {row[0]: row[1] for row in await cur.fetchall()}
+            # details for no/late
+            cur = await db.execute("SELECT user_id, response, reason FROM training_attendance WHERE date=? AND response IN ('no','late')", (date_str,))
+            details = await cur.fetchall()
+            # joined users
+            cur = await db.execute("SELECT user_id, nickname, tg_link FROM users WHERE status = ?", ("joined",))
+            joined_users = await cur.fetchall()
+            all_joined_ids = {u[0] for u in joined_users}
+            # answered set
+            cur = await db.execute("SELECT DISTINCT user_id FROM training_attendance WHERE date=?", (date_str,))
+            answered_ids = {r[0] for r in await cur.fetchall()}
+
+        not_answered = [(uid, nick, link) for uid, nick, link in joined_users if uid not in answered_ids]
+        total_joined = len(all_joined_ids)
+        not_answered_count = len(not_answered)
+
+        text_lines = [
+            f"<b>Статистика ответов за {date_str}</b>",
+            f"✅ Да: {agg.get('yes', 0)}",
+            f"❌ Нет: {agg.get('no', 0)}",
+            f"⏰ Опоздаю: {agg.get('late', 0)}",
+            f"⁉️ Не ответили: {not_answered_count} из {total_joined}",
+        ]
+
+        # append reasons list (grouped)
         if details:
-            lines.append("\nПричины:")
+            text_lines.append("")
+            text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
             for uid, resp, reason in details:
-                label = "Нет" if resp=="no" else "Опоздаю"
-                user = await get_user(uid)
-                name = user.get("nickname") if user and user.get("nickname") else str(uid)
-                lines.append(f"— {label}: {name} — {reason}")
-        await message.answer("\n".join(lines))
-    else:
-        rows = res.get("rows", [])
-        if not rows:
-            await message.answer("Нет данных за указанный период.")
-            return
-        lines = ["<b>Статистика за период</b>"]
-        cur_d = None
-        agg_d = {}
-        def flush_day(d):
-            if not agg_d: return []
-            return [f"{d}: Да {agg_d.get('yes',0)} • Нет {agg_d.get('no',0)} • Опоздаю {agg_d.get('late',0)}"]
-        for d, resp, cnt in rows:
-            if d != cur_d:
-                if cur_d is not None:
-                    lines.extend(flush_day(cur_d))
-                cur_d = d; agg_d = {}
-            agg_d[resp] = cnt
-        if cur_d is not None:
-            lines.extend(flush_day(cur_d))
-        await message.answer("\n".join(lines))
+                label = "Нет" if resp == "no" else "Опоздаю"
+                reason = reason or "—"
+                text_lines.append(f"• {label}: {reason} (ID: <code>{uid}</code>)")
 
-async def fetch_new_users(limit: int = 100):
+        await message.answer("\n".join(text_lines))
+
+        # Build and send CSV with not answered
+        import csv
+        csv_name = f"not_answered_{date_str}.csv"
+        with open(csv_name, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Nickname", "Username (tg_link)"])
+            for uid, nick, link in not_answered:
+                uname = username_from_tglink(link)
+                writer.writerow([nick or "-", uname or "-"])
+        try:
+            await message.answer_document(FSInputFile(csv_name), caption="Не ответили (CSV)")
+        except Exception:
+            try:
+                await bot.send_document(message.chat.id, FSInputFile(csv_name))
+            except Exception:
+                pass
+        return
+
+    # RANGE MODE: aggregate by day and print per-day lines (kept old style)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT user_id, clan_id, nickname, created_at FROM users WHERE status = ? ORDER BY created_at DESC LIMIT ?",
-            ("new", limit)
+            "SELECT date, response, COUNT(*) FROM training_attendance WHERE date BETWEEN ? AND ? GROUP BY date, response ORDER BY date ASC",
+            (date_from, date_to)
         )
-        return await cur.fetchall()
+        rows = await cur.fetchall()
 
-def format_new_users(rows) -> str:
-    lines = ["<b>Новые пользователи (status=new)</b>"]
-    if not rows:
-        lines.append("— список пуст —")
-    else:
-        for uid, clan_id, nickname, created_at in rows:
-            cid = f"{int(clan_id):04d}" if clan_id else "—"
-            name = nickname or "-"
-            lines.append(f"ClanID: {cid} • ID: <code>{uid}</code> • Ник: {name} • Создан: {created_at or '-'}")
-        lines.append("\nЧтобы удалить: нажмите кнопку внизу карточки.")
-    return "\n".join(lines)
+    lines = [f"<b>Статистика ответов за период {date_from} — {date_to}</b>"]
+    cur_d = None
+    agg_d = {}
+    def push_day(d):
+        if not agg_d: return
+        lines.append(f"{d}: Да {agg_d.get('yes',0)} • Нет {agg_d.get('no',0)} • Опоздаю {agg_d.get('late',0)}")
 
-def new_users_kb(rows) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for uid, clan_id, nickname, created_at in rows:
-        kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
-    return kb.adjust(1).as_markup()
+    for d, resp, cnt in rows:
+        if d != cur_d:
+            if cur_d is not None:
+                push_day(cur_d)
+            cur_d = d
+            agg_d = {}
+        agg_d[resp] = cnt
+    if cur_d is not None:
+        push_day(cur_d)
+    await message.answer("\n".join(lines))
+
 
 @dp.message(Command("new"))
 async def cmd_new_users(message: Message):
@@ -2066,62 +2107,3 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
 
-@dp.message(Command("train_stats"))
-async def cmd_train_stats(message: Message):
-    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
-        await message.answer("Только модераторы/администраторы.")
-        return
-
-    from zoneinfo import ZoneInfo
-    msk = ZoneInfo("Europe/Moscow")
-    today = datetime.now(msk).date()
-    date_str = today.isoformat()
-
-    # Подсчёты ответов за дату
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT response, COUNT(*) FROM training_attendance WHERE date=? GROUP BY response", (date_str,))
-        rows = await cur.fetchall()
-        counts = {"yes": 0, "no": 0, "late": 0}
-        for resp, cnt in rows:
-            if resp in counts:
-                counts[resp] = cnt
-
-        # Все вступившие игроки
-        cur = await db.execute("SELECT user_id, nickname, tg_link FROM users WHERE status = ?", ("joined",))
-        joined_users = await cur.fetchall()
-        all_joined_ids = [u[0] for u in joined_users]
-
-        # Пользователи, которые ответили (любым ответом)
-        cur = await db.execute("SELECT DISTINCT user_id FROM training_attendance WHERE date=?", (date_str,))
-        answered_ids = {r[0] for r in await cur.fetchall()}
-
-    not_answered = [row for row in joined_users if row[0] not in answered_ids]
-    not_answered_count = len(not_answered)
-    total_joined = len(all_joined_ids)
-
-    # Готовим CSV со списком не ответивших
-    csv_name = f"not_answered_{date_str}.csv"
-    import csv
-    with open(csv_name, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Nickname", "Username (tg_link)"])
-        for uid, nick, link in not_answered:
-            uname = username_from_tglink(link)
-            writer.writerow([nick or "-", uname or "-"])
-
-    text = (
-        f"<b>Статистика ответов за {date_str}</b>\\n"
-        f"✅ Да: {counts['yes']}\\n"
-        f"❌ Нет: {counts['no']}\\n"
-        f"⏰ Опоздаю: {counts['late']}\\n"
-        f"⁉️ Не ответили: {not_answered_count} из {total_joined}"
-    )
-    await message.answer(text)
-    try:
-        await message.answer_document(FSInputFile(csv_name), caption="Не ответили (CSV)")
-    except Exception:
-        # В случае ошибки пробуем как файл
-        try:
-            await bot.send_document(message.chat.id, FSInputFile(csv_name))
-        except Exception:
-            pass
