@@ -15,8 +15,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import (
     ChatMemberUpdated,
     Message,
     KeyboardButton,
