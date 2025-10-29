@@ -15,8 +15,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
+from aiogram.exceptions import TelegramBadRequest
     ChatMemberUpdated,
     Message,
     KeyboardButton,
@@ -38,7 +38,7 @@ CHANNEL_USERNAME = "@SquadBlackBerry"
 CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
-ADMIN_IDS = {403704696, 1806167653, 95472883}                 # {111, 222}
+ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
 MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 7566533396}              # {333}
 
 DB_PATH = "blackberry_bot.db"
@@ -1728,14 +1728,15 @@ async def cmd_train_stats(message: Message):
         if details:
             text_lines.append("")
             text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
-            async with aiosqlite.connect(DB_PATH) as db:
-                for uid, resp, reason in details:
-                    label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
-                    reason = reason or "—"
-                    cur = await db.execute("SELECT nickname FROM users WHERE user_id=?", (uid,))
-                    row = await cur.fetchone()
-                    name = row[0] if row and row[0] else str(uid)
-                    text_lines.append(f"{label}: {name}: {reason}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        for uid, resp, reason in details:
+            label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
+            reason = reason or "—"
+            cur = await db.execute("SELECT nickname FROM users WHERE user_id=?", (uid,))
+            row = await cur.fetchone()
+            name = row[0] if row and row[0] else str(uid)
+            text_lines.append(f"{label}: {name}: {reason}")
+
 
         await message.answer("\n".join(text_lines))
 
@@ -2111,3 +2112,29 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
 
+
+async def fetch_new_users(limit: int = 100):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, clan_id, nickname, created_at FROM users WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+            ("new", limit)
+        )
+        return await cur.fetchall()
+
+def format_new_users(rows) -> str:
+    lines = ["<b>Новые пользователи (status=new)</b>"]
+    if not rows:
+        lines.append("— список пуст —")
+    else:
+        for uid, clan_id, nickname, created_at in rows:
+            cid = f"{int(clan_id):04d}" if clan_id else "—"
+            name = nickname or "-"
+            lines.append(f"ClanID: {cid} • ID: <code>{uid}</code> • Ник: {name} • Создан: {created_at or '-'}")
+        lines.append("\nЧтобы удалить: нажмите кнопку внизу карточки.")
+    return "\n".join(lines)
+
+def new_users_kb(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for uid, clan_id, nickname, created_at in rows:
+        kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
+    return kb.adjust(1).as_markup()
