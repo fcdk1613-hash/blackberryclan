@@ -1729,9 +1729,10 @@ async def cmd_train_stats(message: Message):
             text_lines.append("")
             text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
             for uid, resp, reason in details:
-                label = "Нет" if resp == "no" else "Опоздаю"
+                label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
                 reason = reason or "—"
-                text_lines.append(f"• {label}: {reason} (ID: <code>{uid}</code>)")
+                name = user.get("nickname") if user and user.get("nickname") else str(uid)
+                text_lines.append(f"{label}: {name}: {reason}")
 
         await message.answer("\n".join(text_lines))
 
