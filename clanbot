@@ -1491,7 +1491,7 @@ async def send_evening_training_poll():
                 WHERE t.user_id = u.user_id AND t.date = ?
               )
             """,
-            ("removed", date_str)
+            ("joined", date_str)
         )
         ids = [r[0] for r in await cur.fetchall()]
     for uid in ids:
@@ -1510,12 +1510,13 @@ async def check_training_inactive_3days():
             """
             SELECT u.user_id FROM users u
             WHERE u.status = ?
+              AND (u.fraction IS NULL OR u.fraction != 'Резерв')
               AND u.user_id NOT IN (
                 SELECT DISTINCT user_id FROM training_attendance
                 WHERE date IN (?,?,?)
               )
             """,
-            ("removed", days[0], days[1], days[2])
+            ("joined", days[0], days[1], days[2])
         )
         ids = [r[0] for r in await cur.fetchall()]
     if not ids:
