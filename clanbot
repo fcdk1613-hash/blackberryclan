@@ -1929,7 +1929,7 @@ async def send_faction_notice(user_id: int, faction: str):
         "Black hole": "Поздравляем! Твоя фракция изменена на Black Hole! Ты - элита клана. Твой командир: Chidori(@Bigchungusik)",
         "Armless": "Поздравляем! Твоя фракция изменена на Armless. Твой командир: Lazy(@lazyprogramer)",
         "Brainless": "Поздравляем! Твоя фракция изменена на Brainless. Твой командир: Zerox(@Sadz3ro)",
-        "Burning assholes": "Поздравляем! Твоя фракция изменена на Burning assholes. Твой командир: FIuffy_Racc00n(@FIuffy_Racc00n)"
+        "Burning assholes": "Поздравляем! Твоя фракция изменена на Burning assholes. Твой командир: FIuffy_Racc00n(@FIuffy_Racc00n)",
         "Useless cans": "Поздравляем! Твоя фракция изменена на Useless cans. Твой командир: Gadler(@Gadler0)",
         "Резерв": "Ты переведен в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
     }
