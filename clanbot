@@ -114,12 +114,6 @@ def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
         ("burning", "Burning Assholes"),
         ("freshmeat", "Fresh Meat"),
         ("useless", "Useless cans"),
-        ("reserve", "Резерв"),
-    )
-
-,
-        ("blue", "Blueberry"),
-        ("water", "Watermelon"),
         ("recruit", "Fresh Meat"),
         ("reserve", "Резерв"),
         ("command", "Штаб"),
