@@ -1926,9 +1926,11 @@ async def check_birthdays_today():
 
 async def send_faction_notice(user_id: int, faction: str):
     texts = {
-        "Cranberry": "Твоя фракция изменена на Cranberry. Твой командир: Mukuru. Измени свой тэг на: ❀[BBa]",
-        "Blueberry": "Твоя фракция изменена на Blueberry. Твой командир: Buti. Измени свой тэг на: ❀[BBb]",
-        "Watermelon": "Твоя фракция изменена на Watermelon. Твой командир: Gadler. Измени свой тэг на: ❀[BBc]",
+        "Black hole": "Поздравляем! Твоя фракция изменена на Black Hole! Ты - элита клана. Твой командир: Chidori(@Bigchungusik)",
+        "Armless": "Поздравляем! Твоя фракция изменена на Armless. Твой командир: Lazy(@lazyprogramer)",
+        "Brainless": "Поздравляем! Твоя фракция изменена на Brainless. Твой командир: Zerox(@Sadz3ro)",
+        "Burning assholes": "Поздравляем! Твоя фракция изменена на Burning assholes. Твой командир: FIuffy_Racc00n(@FIuffy_Racc00n)"
+        "Useless cans": "Поздравляем! Твоя фракция изменена на Useless cans. Твой командир: Gadler(@Gadler0)",
         "Резерв": "Ты переведен в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
     }
     text = texts.get(faction)
@@ -2003,7 +2005,8 @@ async def cmd_accept(message: Message):
         try:
             await bot.send_message(
                 target_id,
-                "Необходимо поставить тег в игре: ❀[BBr]\n\n"
+                "Необходимо поставить тег в игре: [BBr]\n"
+                "Твой командир: Gocha(@Bagman7)\n\n"
                 "Названия тренировочных серверов и пароли от них\n"
                 "Blackberry | Training - Blackberries #1 0106\n"
                 "Blackberry | Training- Strawberries #2 7848\n"
