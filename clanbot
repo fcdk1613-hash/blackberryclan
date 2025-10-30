@@ -92,23 +92,37 @@ class Status(str, Enum):
     JOINED = "joined"
     REMOVED = "removed"
 
+
 FACTIONS = {
-    "cran": "Cranberry",
-    "blue": "Blueberry",
-    "water": "Watermelon",
-    "recruit": "Рекрут",
+    "hq": "Штаб",
+    "blackhole": "Black Hole",
+    "armless": "Armless",
+    "brainless": "Brainless",
+    "burning": "Burning Assholes",
+    "freshmeat": "Fresh Meat",
+    "useless": "Useless cans",
     "reserve": "Резерв",
-    "command": "Командование",
 }
+
 
 def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
     return (
-        ("cran", "Cranberry"),
+        ("hq", "Штаб"),
+        ("blackhole", "Black Hole"),
+        ("armless", "Armless"),
+        ("brainless", "Brainless"),
+        ("burning", "Burning Assholes"),
+        ("freshmeat", "Fresh Meat"),
+        ("useless", "Useless cans"),
+        ("reserve", "Резерв"),
+    )
+
+,
         ("blue", "Blueberry"),
         ("water", "Watermelon"),
-        ("recruit", "Рекрут"),
+        ("recruit", "Fresh Meat"),
         ("reserve", "Резерв"),
-        ("command", "Командование"),
+        ("command", "Штаб"),
     )
 
 async def init_db():
@@ -283,12 +297,19 @@ def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     return kb.adjust(1).as_markup()
 
+
 def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
+    for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
-    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
+    for code, title in (("armless","Armless"),("brainless","Brainless")):
+        kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
+    kb.row()
+    for code, title in (("burning","Burning Assholes"),("freshmeat","Fresh Meat")):
+        kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
+    kb.row()
+    for code, title in (("useless","Useless cans"),("reserve","Резерв")):
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
@@ -752,7 +773,7 @@ async def on_profile_set_faction(call: CallbackQuery):
     try:
         _, uid_str, code = call.data.split(":")
         target_id = int(uid_str)
-        title = {"cran":"Cranberry","blue":"Blueberry","water":"Watermelon","recruit":"Рекрут","reserve":"Резерв","command":"Командование"}.get(code)
+        title = {"hq":"Штаб","blackhole":"Black Hole","armless":"Armless","brainless":"Brainless","burning":"Burning Assholes","freshmeat":"Fresh Meat","useless":"Useless cans","reserve":"Резерв"}.get(code)
         if not title:
             raise ValueError("unknown faction code")
     except Exception:
@@ -975,7 +996,7 @@ async def on_approve(call: CallbackQuery):
         await call.answer("Заявка уже отклонена ранее.", show_alert=True)
         return
 
-    faction = user.get("faction") or "Рекрут"
+    faction = user.get("faction") or "Fresh Meat"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
@@ -1317,12 +1338,19 @@ def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: boo
     kb.button(text=("• Фракции" if filter_type=="faction" else "Фракции"), callback_data=f"players:choose_faction::{page}")
     return kb.adjust(1).as_markup()
 
+
 def players_factions_kb(page: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
+    for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
-    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
+    for code, title in (("armless","Armless"),("brainless","Brainless")):
+        kb.button(text=title, callback_data=f"players:faction:{title}:1")
+    kb.row()
+    for code, title in (("burning","Burning Assholes"),("freshmeat","Fresh Meat")):
+        kb.button(text=title, callback_data=f"players:faction:{title}:1")
+    kb.row()
+    for code, title in (("useless","Useless cans"),("reserve","Резерв")):
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
     kb.button(text="⬅️ Назад (все)", callback_data="players:all::1")
@@ -1858,7 +1886,7 @@ async def check_recruit_promotion_candidates():
         cur = await db.execute(
             "SELECT user_id, nickname, tg_link, joined_at FROM users "
             "WHERE status = ? AND faction = ? AND joined_at IS NOT NULL AND date(joined_at) <= date(?)",
-            ("joined", "Рекрут", threshold)
+            ("joined", "Fresh Meat", threshold)
         )
         rows = await cur.fetchall()
     for uid, nickname, tg_link, joined_at in rows:
@@ -1961,7 +1989,7 @@ async def cmd_accept(message: Message):
         return
 
     # Set APPROVED and default faction if empty
-    faction = user.get("faction") or "Рекрут"
+    faction = user.get("faction") or "Fresh Meat"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
