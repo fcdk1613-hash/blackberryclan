@@ -12,6 +12,8 @@ from typing import Optional, Tuple, List
 import csv
 import aiosqlite
 from aiogram import Bot, Dispatcher, F
+from aiogram.filters import StateFilter
+
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
@@ -2210,7 +2212,7 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     return kb.adjust(1).as_markup()
 
 
-@dp.message(ReserveReturnStates.waiting_date)
+@dp.message(StateFilter(ReserveReturnStates.waiting_date))
 async def on_reserve_date_entered(message: Message, state: FSMContext):
     txt = (message.text or "").strip()
     from datetime import datetime as _dt
@@ -2276,7 +2278,7 @@ async def check_reserve_returns_tomorrow():
         return
     for uid, nick in users_to_notify:
         name = nick or str(uid)
-        msg = f'Игрок "{name}" должен вернуться завтра. Свяжитесь с ним',
+        msg = f"Игрок "{name}" должен вернуться завтра. Свяжитесь с ним"
         try:
             await notify_staff(msg)
         except Exception:
