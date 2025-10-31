@@ -220,6 +220,10 @@ async def search_users_by_nickname(q: str, limit: int = 10) -> List[dict]:
         return [dict(zip(columns, r)) for r in rows]
 
 # ======= FSM =======
+
+class ReserveReturnStates(StatesGroup):
+    waiting_date = State()
+
 class RegStates(StatesGroup):
     waiting_phone = State()
     waiting_nickname = State()
@@ -746,7 +750,7 @@ async def on_profile_back(call: CallbackQuery):
     await call.answer()
 
 @dp.callback_query(F.data.startswith("facset:"))
-async def on_profile_set_faction(call: CallbackQuery):
+async def on_profile_set_faction(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Недостаточно прав.", show_alert=True)
         return
@@ -760,6 +764,21 @@ async def on_profile_set_faction(call: CallbackQuery):
         await call.answer("Некорректные данные.", show_alert=True)
         return
     await upsert_user(target_id, faction=title)
+    # If set to Reserve, ask moderator for return date in DD.MM.YYYY
+    if code == "reserve":
+        try:
+            # fetch name for prompt
+            _u = await get_user(target_id)
+            _name = (_u.get("nickname") if _u else None) or str(target_id)
+        except Exception:
+            _name = str(target_id)
+        await state.update_data(reserve_user_id=target_id)
+        await state.set_state(ReserveReturnStates.waiting_date)
+        try:
+            await call.message.answer(f"Введите дату возврата игрока {_name} в формате ДД.ММ.ГГГГ")
+        except Exception:
+            pass
+
     # Уведомление игрока о смене фракции
     await send_faction_notice(target_id, title)
 
@@ -2189,3 +2208,92 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
+
+
+@dp.message(ReserveReturnStates.waiting_date)
+async def on_reserve_date_entered(message: Message, state: FSMContext):
+    txt = (message.text or "").strip()
+    from datetime import datetime as _dt
+    try:
+        dt = _dt.strptime(txt, "%d.%m.%Y").date()
+    except Exception:
+        await message.answer("❌ Неверный формат. Введите ДД.ММ.ГГГГ, например: 25.12.2025")
+        return
+    data = await state.get_data()
+    uid = data.get("reserve_user_id")
+    if not uid:
+        await message.answer("Не удалось определить игрока. Повторите установку фракции 'Резерв'.")
+        await state.clear()
+        return
+    # Save the date to DB
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS reserve_returns (
+                    user_id INTEGER PRIMARY KEY,
+                    return_date TEXT NOT NULL,   -- YYYY-MM-DD
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await db.execute(
+                "INSERT INTO reserve_returns(user_id, return_date, created_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET return_date=excluded.return_date, created_at=excluded.created_at",
+                (uid, dt.isoformat(), datetime.utcnow().isoformat())
+            )
+            await db.commit()
+        await message.answer(f"✅ Дата возврата для игрока {uid} установлена: {dt.strftime('%d.%m.%Y')}")
+    except Exception as e:
+        await message.answer(f"Ошибка сохранения даты: {e}")
+    await state.clear()
+
+
+async def check_reserve_returns_tomorrow():
+    # Notify admins/moderators at 11:00 MSK about players returning tomorrow
+    try:
+        from zoneinfo import ZoneInfo
+        msk = ZoneInfo("Europe/Moscow")
+    except Exception:
+        msk = None
+    today_msk = (datetime.now(msk) if msk else datetime.utcnow()).date()
+    from datetime import timedelta as _td
+    tomorrow = (today_msk + _td(days=1)).isoformat()
+    users_to_notify = []
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reserve_returns (
+                user_id INTEGER PRIMARY KEY,
+                return_date TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cur = await db.execute("SELECT user_id FROM reserve_returns WHERE return_date = ?", (tomorrow,))
+        ids = [r[0] for r in await cur.fetchall()]
+        if ids:
+            q = f"SELECT user_id, nickname FROM users WHERE user_id IN ({','.join(['?']*len(ids))})"
+            cur = await db.execute(q, ids)
+            users_to_notify = await cur.fetchall()
+    if not users_to_notify:
+        return
+    for uid, nick in users_to_notify:
+        name = nick or str(uid)
+        msg = f"Игрок "{name}" должен вернуться завтра. Свяжитесь с ним"
+        try:
+            await notify_staff(msg)
+        except Exception:
+            # Fallback direct DM
+            try:
+                all_ids = list(ADMIN_IDS | MODERATOR_IDS)
+                for mid in all_ids:
+                    try:
+                        await bot.send_message(mid, msg)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+
+# Register daily reminder at 11:00 MSK (if scheduler is present)
+try:
+    scheduler.add_job(check_reserve_returns_tomorrow, CronTrigger(hour=11, minute=0, timezone="Europe/Moscow"))
+except Exception:
+    pass
