@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, date
 from enum import Enum
 from typing import Optional, Tuple, List
 import aiosqlite
+import csv
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
