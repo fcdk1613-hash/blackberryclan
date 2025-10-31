@@ -2276,7 +2276,7 @@ async def check_reserve_returns_tomorrow():
         return
     for uid, nick in users_to_notify:
         name = nick or str(uid)
-        msg = f"Игрок "{name}" должен вернуться завтра. Свяжитесь с ним"
+        msg = f"Игрок "{name}" должен вернуться завтра. Свяжитесь с ним",
         try:
             await notify_staff(msg)
         except Exception:
