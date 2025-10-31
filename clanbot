@@ -92,31 +92,23 @@ class Status(str, Enum):
     JOINED = "joined"
     REMOVED = "removed"
 
-
 FACTIONS = {
-    "hq": "Штаб",
-    "blackhole": "Black Hole",
-    "armless": "Armless",
-    "brainless": "Brainless",
-    "burning": "Burning Assholes",
-    "freshmeat": "Fresh Meat",
-    "useless": "Useless cans",
+    "cran": "Cranberry",
+    "blue": "Blueberry",
+    "water": "Watermelon",
+    "recruit": "Рекрут",
     "reserve": "Резерв",
+    "command": "Командование",
 }
-
 
 def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
     return (
-        ("hq", "Штаб"),
-        ("blackhole", "Black Hole"),
-        ("armless", "Armless"),
-        ("brainless", "Brainless"),
-        ("burning", "Burning Assholes"),
-        ("freshmeat", "Fresh Meat"),
-        ("useless", "Useless cans"),
-        ("recruit", "Fresh Meat"),
+        ("cran", "Cranberry"),
+        ("blue", "Blueberry"),
+        ("water", "Watermelon"),
+        ("recruit", "Рекрут"),
         ("reserve", "Резерв"),
-        ("command", "Штаб"),
+        ("command", "Командование"),
     )
 
 async def init_db():
@@ -291,19 +283,12 @@ def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     return kb.adjust(1).as_markup()
 
-
 def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
+    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
-    for code, title in (("armless","Armless"),("brainless","Brainless")):
-        kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
-    kb.row()
-    for code, title in (("burning","Burning Assholes"),("freshmeat","Fresh Meat")):
-        kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
-    kb.row()
-    for code, title in (("useless","Useless cans"),("reserve","Резерв")):
+    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
@@ -767,7 +752,7 @@ async def on_profile_set_faction(call: CallbackQuery):
     try:
         _, uid_str, code = call.data.split(":")
         target_id = int(uid_str)
-        title = {"hq":"Штаб","blackhole":"Black Hole","armless":"Armless","brainless":"Brainless","burning":"Burning Assholes","freshmeat":"Fresh Meat","useless":"Useless cans","reserve":"Резерв"}.get(code)
+        title = {"cran":"Cranberry","blue":"Blueberry","water":"Watermelon","recruit":"Рекрут","reserve":"Резерв","command":"Командование"}.get(code)
         if not title:
             raise ValueError("unknown faction code")
     except Exception:
@@ -990,7 +975,7 @@ async def on_approve(call: CallbackQuery):
         await call.answer("Заявка уже отклонена ранее.", show_alert=True)
         return
 
-    faction = user.get("faction") or "Fresh Meat"
+    faction = user.get("faction") or "Рекрут"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
@@ -1332,19 +1317,12 @@ def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: boo
     kb.button(text=("• Фракции" if filter_type=="faction" else "Фракции"), callback_data=f"players:choose_faction::{page}")
     return kb.adjust(1).as_markup()
 
-
 def players_factions_kb(page: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
+    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
-    for code, title in (("armless","Armless"),("brainless","Brainless")):
-        kb.button(text=title, callback_data=f"players:faction:{title}:1")
-    kb.row()
-    for code, title in (("burning","Burning Assholes"),("freshmeat","Fresh Meat")):
-        kb.button(text=title, callback_data=f"players:faction:{title}:1")
-    kb.row()
-    for code, title in (("useless","Useless cans"),("reserve","Резерв")):
+    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
     kb.button(text="⬅️ Назад (все)", callback_data="players:all::1")
@@ -1406,18 +1384,53 @@ async def cmd_players(message: Message):
         await message.answer("Только модераторы/администраторы.")
         return
 
-    # Sync: approved users already in chat -> mark as JOINED
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Общее количество вступивших
+        cur = await db.execute("SELECT COUNT(1) FROM users WHERE status=?", ("joined",))
+        total_joined = (await cur.fetchone())[0]
+
+        # Кол-во по фракциям
+        cur = await db.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(faction), ''), '—') AS fac, COUNT(1) AS c
+            FROM users
+            WHERE status = 'joined'
+            GROUP BY fac
+            ORDER BY c DESC, fac ASC
+            """
+        )
+        faction_rows = await cur.fetchall()
+
+        # Данные для CSV
+        cur = await db.execute(
+            """
+            SELECT clan_id, user_id, nickname, discord, steamid, age, birth_date, timezone, tg_link, faction, joined_at
+            FROM users
+            WHERE status = 'joined'
+            ORDER BY clan_id ASC
+            """
+        )
+        csv_rows = await cur.fetchall()
+        csv_cols = [d[0] for d in cur.description]
+
+    # Формируем текст
+    lines = [f"<b>Игроки клана (вступившие)</b>", f"Всего: <b>{total_joined}</b>"]
+    if faction_rows:
+        lines.append("По фракциям:")
+        for fac, c in faction_rows:
+            lines.append(f"• {fac}: {c}")
+    await message.answer("\n".join(lines))
+
+    # CSV
+    fname = f"clan_joined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    with open(fname, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(csv_cols)
+        writer.writerows(csv_rows)
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT user_id FROM users WHERE status=?", (Status.APPROVED.value,))
-            ids = [r[0] for r in await cur.fetchall()]
-        for uid in ids[:100]:
-            await ensure_joined_if_member(uid)
+        await message.answer_document(FSInputFile(fname), caption="Состав клана (joined) — CSV")
     except Exception:
         pass
-    rows = await fetch_joined_players()
-    text = format_players_brief(rows)
-    await message.answer(text)
 
 @dp.callback_query(F.data.startswith("players:choose_faction"))
 async def on_players_choose_faction(call: CallbackQuery):
@@ -1880,7 +1893,7 @@ async def check_recruit_promotion_candidates():
         cur = await db.execute(
             "SELECT user_id, nickname, tg_link, joined_at FROM users "
             "WHERE status = ? AND faction = ? AND joined_at IS NOT NULL AND date(joined_at) <= date(?)",
-            ("joined", "Fresh Meat", threshold)
+            ("joined", "Рекрут", threshold)
         )
         rows = await cur.fetchall()
     for uid, nickname, tg_link, joined_at in rows:
@@ -1926,12 +1939,9 @@ async def check_birthdays_today():
 
 async def send_faction_notice(user_id: int, faction: str):
     texts = {
-        "Black Hole": "Поздравляем! Твоя фракция изменена на Black Hole! Ты - элита клана. Твой командир: Chidori(@Bigchungusik)",
-        "Armless": "Поздравляем! Твоя фракция изменена на Armless. Твой командир: Lazy(@lazyprogramer)",
-        "Brainless": "Поздравляем! Твоя фракция изменена на Brainless. Твой командир: Zerox(@Sadz3ro)",
-        "Burning Assholes": "Поздравляем! Твоя фракция изменена на Burning assholes. Твой командир: FIuffy_Racc00n(@FIuffy_Racc00n)",
-        "Useless cans": "Поздравляем! Твоя фракция изменена на Useless cans. Твой командир: Gadler(@Gadler0)",
-        "Штаб": "Поздравляем! Ты избран Богом, судьбой и Кичем. Твоя фракция: Штаб. Помни, ты ответственен за людей.",
+        "Cranberry": "Твоя фракция изменена на Cranberry. Твой командир: Mukuru. Измени свой тэг на: ❀[BBa]",
+        "Blueberry": "Твоя фракция изменена на Blueberry. Твой командир: Buti. Измени свой тэг на: ❀[BBb]",
+        "Watermelon": "Твоя фракция изменена на Watermelon. Твой командир: Gadler. Измени свой тэг на: ❀[BBc]",
         "Резерв": "Ты переведен в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
     }
     text = texts.get(faction)
@@ -1986,7 +1996,7 @@ async def cmd_accept(message: Message):
         return
 
     # Set APPROVED and default faction if empty
-    faction = user.get("faction") or "Fresh Meat"
+    faction = user.get("faction") or "Рекрут"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
@@ -2006,8 +2016,7 @@ async def cmd_accept(message: Message):
         try:
             await bot.send_message(
                 target_id,
-                "Необходимо поставить тег в игре: [BBr]\n"
-                "Твой командир: Gocha(@Bagman7)\n\n"
+                "Необходимо поставить тег в игре: ❀[BBr]\n\n"
                 "Названия тренировочных серверов и пароли от них\n"
                 "Blackberry | Training - Blackberries #1 0106\n"
                 "Blackberry | Training- Strawberries #2 7848\n"
