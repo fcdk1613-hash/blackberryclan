@@ -2412,38 +2412,71 @@ if router:
         await cb.answer()
 
 
-# === BB AUTO MAIN MENU (joined-only, persistent) ===
-# Этот блок НИЧЕГО не меняет в существующей логике.
-# Он только гарантирует, что у игроков со статусом 'joined' в ЛС всегда будет видна
-# reply-кнопка «🏠 Главное меню». Кнопка ставится при любом входящем сообщении.
+# === BB ALWAYS-ON MAIN MENU (joined-only, aiogram 3.x, non-destructive) ===
+# Гарантирует, что у joined-игроков ВСЕГДА есть reply-кнопка «🏠 Главное меню» в приватном чате.
+# Ничего не удаляет и не переопределяет — просто добавляет отдельные обработчики dp/router.
 
 from typing import Set
+
 _BB_MENU_INSTALLED: Set[int] = set()
 
-def bb_main_menu_reply_kb() -> ReplyKeyboardMarkup:
+def _bb_reply_main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие…",
     )
 
-@dp.message()  # без фильтров — сработает на ЛЮБОЕ сообщение
-async def _bb_auto_attach_main_menu(message: Message):
+async def _bb_is_joined(user_id: int) -> bool:
+    # Пробуем вашу get_user(); если нет — считаем, что не joined (не вмешиваемся).
     try:
-        # Только приватные чаты, чтобы не спамить в группах
+        u = await get_user(user_id)  # type: ignore
+        if u and (u.get("status") or "").lower() == "joined":
+            return True
+    except Exception:
+        return False
+    return False
+
+@dp.message()  # aiogram 3.x: без фильтров — ловим любое сообщение
+async def _bb_attach_menu_any_message(message: Message):
+    try:
         if getattr(message.chat, "type", "") != "private":
             return
-        uid = message.from_user.id if message.from_user else None
-        if not uid or uid in _BB_MENU_INSTALLED:
+        if not getattr(message, "from_user", None):
             return
-        user = await get_user(uid)  # используем вашу функцию
-        status = (user.get("status") if isinstance(user, dict) else "") or ""
-        if status.lower() != "joined":
+        uid = message.from_user.id
+        # Один раз на пользователя за процесс, чтобы не спамить
+        if uid in _BB_MENU_INSTALLED:
             return
-        # Отправляем одно короткое сообщение с клавиатурой — клавиатура далее сохраняется
-        await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_main_menu_reply_kb())
+        if not await _bb_is_joined(uid):
+            return
+        await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=_bb_reply_main_menu_kb())
         _BB_MENU_INSTALLED.add(uid)
     except Exception:
-        # Никого не блокируем, чтобы не мешать остальным хендлерам
+        # Ничего не ломаем, пропускаем
         pass
+
+# Зеркальный обработчик для Router(), если он используется в проекте
+try:
+    router  # type: ignore
+except NameError:
+    router = None
+
+if router:
+    @router.message()
+    async def _bb_attach_menu_any_message_r(message: Message):
+        try:
+            if getattr(message.chat, "type", "") != "private":
+                return
+            if not getattr(message, "from_user", None):
+                return
+            uid = message.from_user.id
+            if uid in _BB_MENU_INSTALLED:
+                return
+            if not await _bb_is_joined(uid):
+                return
+            await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=_bb_reply_main_menu_kb())
+            _BB_MENU_INSTALLED.add(uid)
+        except Exception:
+            pass
 
