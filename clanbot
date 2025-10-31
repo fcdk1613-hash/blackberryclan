@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, date
 from enum import Enum
 from typing import Optional, Tuple, List
 import aiosqlite
-import csv
 from aiogram import Bot, Dispatcher, F
 from aiogram import F
 from aiogram.types import Message
@@ -1416,48 +1415,18 @@ async def cmd_players(message: Message):
         await message.answer("Только модераторы/администраторы.")
         return
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT COUNT(1) FROM users WHERE status=?", ("joined",))
-        total_joined = (await cur.fetchone())[0]
-
-        cur = await db.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(faction), ''), '—') AS fac, COUNT(1) AS c
-            FROM users
-            WHERE status = 'joined'
-            GROUP BY fac
-            ORDER BY c DESC, fac ASC
-            """
-        )
-        faction_rows = await cur.fetchall()
-
-        cur = await db.execute(
-            """
-            SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
-            FROM users
-            WHERE status = 'joined'
-            ORDER BY clan_id ASC
-            """
-        )
-        csv_rows = await cur.fetchall()
-        csv_cols = [d[0] for d in cur.description]
-
-    lines = [f"<b>Игроки клана (вступившие)</b>", f"Всего: <b>{total_joined}</b>"]
-    if faction_rows:
-        lines.append("По фракциям:")
-        for fac, c in faction_rows:
-            lines.append(f"• {fac}: {c}")
-    await message.answer("\n".join(lines))
-
-    fname = f"clan_joined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
-    with open(fname, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(csv_cols)
-        writer.writerows(csv_rows)
+    # Sync: approved users already in chat -> mark as JOINED
     try:
-        await message.answer_document(FSInputFile(fname), caption="Состав клана (joined) — CSV")
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("SELECT user_id FROM users WHERE status=?", (Status.APPROVED.value,))
+            ids = [r[0] for r in await cur.fetchall()]
+        for uid in ids[:100]:
+            await ensure_joined_if_member(uid)
     except Exception:
         pass
+    rows = await fetch_joined_players()
+    text = format_players_brief(rows)
+    await message.answer(text)
 
 @dp.callback_query(F.data.startswith("players:choose_faction"))
 async def on_players_choose_faction(call: CallbackQuery):
@@ -1548,7 +1517,6 @@ async def send_evening_training_poll():
             """
             SELECT u.user_id FROM users u
             WHERE u.status = ?
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
               AND NOT EXISTS (
                 SELECT 1 FROM training_attendance t
                 WHERE t.user_id = u.user_id AND t.date = ?
@@ -1573,7 +1541,7 @@ async def check_training_inactive_3days():
             """
             SELECT u.user_id FROM users u
             WHERE u.status = ?
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
+              AND (u.fraction IS NULL OR u.fraction != 'Резерв')
               AND u.user_id NOT IN (
                 SELECT DISTINCT user_id FROM training_attendance
                 WHERE date IN (?,?,?)
@@ -1612,7 +1580,7 @@ async def send_daily_training_poll():
     kb = training_kb(date_str)
     # send to all active users (exclude removed)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT user_id FROM users WHERE status = ? AND (faction IS NULL OR faction != 'Резерв')", ("joined",))
+        cur = await db.execute("SELECT user_id FROM users WHERE status = ?", ("joined",))
         ids = [r[0] for r in await cur.fetchall()]
     for uid in ids:
         try:
@@ -2221,14 +2189,13 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     return kb.adjust(1).as_markup()
 
 
-# ===================== Главное меню для игроков (joined) =====================
-
 def persistent_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие…",
     )
+
 
 def main_menu_inline_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -2242,54 +2209,61 @@ def main_menu_inline_kb() -> InlineKeyboardMarkup:
     kb.button(text="🟠 Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
     return kb.as_markup()
 
+
 async def _show_main_menu(message: Message):
     user = await get_user(message.from_user.id)
-    if not user or (user.get("status") or "").lower() != "joined":
+    status = (user.get("status") if isinstance(user, dict) else None) or ""
+    if status.lower() != "joined":
         await message.answer("Меню доступно только вступившим игрокам.")
         return
-    try:
-        await message.answer("Выберите раздел:", reply_markup=main_menu_inline_kb())
-    except Exception:
-        await message.answer("Выберите раздел:")
+    await message.answer("Выберите раздел:", reply_markup=main_menu_inline_kb())
 
-# Показываем кнопку всегда на /start для joined
-@dp.message(Command("start"))
-async def start_attach_main_menu_button(message: Message):
+
+async def _install_persistent_menu_if_joined(message: Message):
     try:
         user = await get_user(message.from_user.id)
     except Exception:
         user = None
-    if not user or (user.get("status") or "").lower() != "joined":
+    status = (user.get("status") if isinstance(user, dict) else None) or ""
+    if status.lower() != "joined":
         return
     try:
         await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=persistent_menu_kb())
     except Exception:
         pass
 
-# Открытие меню командами/кнопкой
+
+@dp.message(Command("start"))
+async def _dp_start_menu_button(message: Message):
+    await _install_persistent_menu_if_joined(message)
+
+
 @dp.message(Command("menu"))
-async def cmd_menu(message: Message):
+async def _dp_cmd_menu(message: Message):
     await _show_main_menu(message)
+
 
 @dp.message(F.text == "🏠 Главное меню")
-async def on_main_menu_button(message: Message):
+async def _dp_on_main_menu_button(message: Message):
     await _show_main_menu(message)
 
-# --- callbacks ---
+
 @dp.callback_query(F.data == "mm:att")
-async def on_mm_att(cb: CallbackQuery):
+async def _dp_mm_att(cb: CallbackQuery):
     try:
         from zoneinfo import ZoneInfo
-        msk = ZoneInfo("Europe/Moscow")
-        date_str = datetime.now(msk).date().isoformat()
+        from datetime import datetime as _dt
+        date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
     except Exception:
-        date_str = datetime.utcnow().date().isoformat()
+        from datetime import datetime as _dt
+        date_str = _dt.utcnow().date().isoformat()
     try:
         kb = training_kb(date_str)
     except Exception:
         kb = InlineKeyboardBuilder().as_markup()
     await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
     await cb.answer()
+
 
 @dp.callback_query(F.data == "mm:contacts")
 async def on_mm_contacts(cb: CallbackQuery):
@@ -2300,5 +2274,3 @@ async def on_mm_contacts(cb: CallbackQuery):
 async def on_mm_events(cb: CallbackQuery):
     await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
     await cb.answer()
-
-
