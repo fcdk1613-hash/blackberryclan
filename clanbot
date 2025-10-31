@@ -999,7 +999,8 @@ async def on_approve(call: CallbackQuery):
     # Дополнительно: инструкции по тэгу и тренировочным серверам
     await bot.send_message(
         target_id,
-        "Необходимо поставить тег в игре: ❀[BBr]\n\n"
+        "Необходимо поставить тег в игре: ❀[BBr]\n"
+        "Твой командир Gocha(@Bagman7)\n\n"
         "Названия тренировочных серверов и пароли от них\n"
         "Blackberry | Training - Blackberries #1 0106\n"
         "Blackberry | Training- Strawberries #2 7848\n"
