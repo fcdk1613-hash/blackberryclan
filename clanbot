@@ -1414,13 +1414,13 @@ async def cmd_players(message: Message):
         total_joined = (await cur.fetchone())[0]
 
         cur = await db.execute(
-            \"\"\"
+            """
             SELECT COALESCE(NULLIF(TRIM(faction), ''), '—') AS fac, COUNT(1) AS c
             FROM users
             WHERE status = 'joined'
             GROUP BY fac
             ORDER BY c DESC, fac ASC
-            \"\"\"
+            """
         )
         faction_rows = await cur.fetchall()
 
