@@ -1425,12 +1425,12 @@ async def cmd_players(message: Message):
         faction_rows = await cur.fetchall()
 
         cur = await db.execute(
-            \"\"\"
+            """
             SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
             FROM users
             WHERE status = 'joined'
             ORDER BY clan_id ASC
-            \"\"\"
+            """
         )
         csv_rows = await cur.fetchall()
         csv_cols = [d[0] for d in cur.description]
