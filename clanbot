@@ -9,7 +9,6 @@ import logging
 from datetime import datetime, timedelta, date
 from enum import Enum
 from typing import Optional, Tuple, List
-import csv
 import aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram import F
@@ -99,23 +98,34 @@ class Status(str, Enum):
     JOINED = "joined"
     REMOVED = "removed"
 
+
 FACTIONS = {
-    "cran": "Cranberry",
-    "blue": "Blueberry",
-    "water": "Watermelon",
-    "recruit": "Рекрут",
+    "hq": "Штаб",
+    "blackhole": "Black Hole",
+    "armless": "Armless",
+    "brainless": "Brainless",
+    "burning": "Burning Assholes",
+    "freshmeat": "Fresh Meat",
+    "useless": "Useless cans",
     "reserve": "Резерв",
-    "command": "Командование",
 }
+
 
 def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
     return (
-        ("cran", "Cranberry"),
+        ("hq", "Штаб"),
+        ("blackhole", "Black Hole"),
+        ("armless", "Armless"),
+        ("brainless", "Brainless"),
+        ("burning", "Burning Assholes"),
+        ("freshmeat", "Fresh Meat"),
+        ("useless", "Useless cans"),
+        ("reserve", "Резерв"),
         ("blue", "Blueberry"),
         ("water", "Watermelon"),
-        ("recruit", "Рекрут"),
+        ("recruit", "Fresh Meat"),
         ("reserve", "Резерв"),
-        ("command", "Командование"),
+        ("command", "Штаб"),
     )
 
 async def init_db():
@@ -226,10 +236,6 @@ async def search_users_by_nickname(q: str, limit: int = 10) -> List[dict]:
         return [dict(zip(columns, r)) for r in rows]
 
 # ======= FSM =======
-
-class ReserveReturnStates(StatesGroup):
-    waiting_date = State()
-
 class RegStates(StatesGroup):
     waiting_phone = State()
     waiting_nickname = State()
@@ -294,12 +300,19 @@ def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     return kb.adjust(1).as_markup()
 
+
 def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
+    for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
-    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
+    for code, title in (("armless","Armless"),("brainless","Brainless")):
+        kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
+    kb.row()
+    for code, title in (("burning","Burning Assholes"),("freshmeat","Fresh Meat")):
+        kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
+    kb.row()
+    for code, title in (("useless","Useless cans"),("reserve","Резерв")):
         kb.button(text=title, callback_data=f"facset:{user_id}:{code}")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
@@ -756,35 +769,20 @@ async def on_profile_back(call: CallbackQuery):
     await call.answer()
 
 @dp.callback_query(F.data.startswith("facset:"))
-async def on_profile_set_faction(call: CallbackQuery, state: FSMContext):
+async def on_profile_set_faction(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Недостаточно прав.", show_alert=True)
         return
     try:
         _, uid_str, code = call.data.split(":")
         target_id = int(uid_str)
-        title = {"cran":"Cranberry","blue":"Blueberry","water":"Watermelon","recruit":"Рекрут","reserve":"Резерв","command":"Командование"}.get(code)
+        title = {"hq":"Штаб","blackhole":"Black Hole","armless":"Armless","brainless":"Brainless","burning":"Burning Assholes","freshmeat":"Fresh Meat","useless":"Useless cans","reserve":"Резерв"}.get(code)
         if not title:
             raise ValueError("unknown faction code")
     except Exception:
         await call.answer("Некорректные данные.", show_alert=True)
         return
     await upsert_user(target_id, faction=title)
-    # If set to Reserve, ask moderator for return date in DD.MM.YYYY
-    if code == "reserve":
-        try:
-            # fetch name for prompt
-            _u = await get_user(target_id)
-            _name = (_u.get("nickname") if _u else None) or str(target_id)
-        except Exception:
-            _name = str(target_id)
-        await state.update_data(reserve_user_id=target_id)
-        await state.set_state(ReserveReturnStates.waiting_date)
-        try:
-            await call.message.answer(f"Введите дату возврата игрока {_name} в формате ДД.ММ.ГГГГ")
-        except Exception:
-            pass
-
     # Уведомление игрока о смене фракции
     await send_faction_notice(target_id, title)
 
@@ -1024,8 +1022,7 @@ async def on_approve(call: CallbackQuery):
     # Дополнительно: инструкции по тэгу и тренировочным серверам
     await bot.send_message(
         target_id,
-        "Необходимо поставить тег в игре: ❀[BBr]\n"
-        "Твой командир Gocha(@Bagman7)\n\n"
+        "Необходимо поставить тег в игре: ❀[BBr]\n\n"
         "Названия тренировочных серверов и пароли от них\n"
         "Blackberry | Training - Blackberries #1 0106\n"
         "Blackberry | Training- Strawberries #2 7848\n"
@@ -1344,12 +1341,19 @@ def players_nav_kb(filter_type: str, filter_value: str, page: int, has_prev: boo
     kb.button(text=("• Фракции" if filter_type=="faction" else "Фракции"), callback_data=f"players:choose_faction::{page}")
     return kb.adjust(1).as_markup()
 
+
 def players_factions_kb(page: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for code, title in (("cran","Cranberry"),("blue","Blueberry"),("water","Watermelon")):
+    for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
-    for code, title in (("recruit","Рекрут"),("reserve","Резерв"),("command","Командование")):
+    for code, title in (("armless","Armless"),("brainless","Brainless")):
+        kb.button(text=title, callback_data=f"players:faction:{title}:1")
+    kb.row()
+    for code, title in (("burning","Burning Assholes"),("freshmeat","Fresh Meat")):
+        kb.button(text=title, callback_data=f"players:faction:{title}:1")
+    kb.row()
+    for code, title in (("useless","Useless cans"),("reserve","Резерв")):
         kb.button(text=title, callback_data=f"players:faction:{title}:1")
     kb.row()
     kb.button(text="⬅️ Назад (все)", callback_data="players:all::1")
@@ -1411,49 +1415,18 @@ async def cmd_players(message: Message):
         await message.answer("Только модераторы/администраторы.")
         return
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT COUNT(1) FROM users WHERE status=?", ("joined",))
-        total_joined = (await cur.fetchone())[0]
-
-        cur = await db.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(faction), ''), '—') AS fac, COUNT(1) AS c
-            FROM users
-            WHERE status = 'joined'
-            GROUP BY fac
-            ORDER BY c DESC, fac ASC
-            """
-        )
-        faction_rows = await cur.fetchall()
-
-        cur = await db.execute(
-            """
-            SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
-            FROM users
-            WHERE status = 'joined'
-            ORDER BY clan_id ASC
-            """
-        )
-        csv_rows = await cur.fetchall()
-        csv_cols = [d[0] for d in cur.description]
-
-    lines = [f"<b>Игроки клана (вступившие)</b>", f"Всего: <b>{total_joined}</b>"]
-    if faction_rows:
-        lines.append("По фракциям:")
-        for fac, c in faction_rows:
-            lines.append(f"• {fac}: {c}")
-    await message.answer("\n".join(lines))
-
-    import csv
-    fname = f"clan_joined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
-    with open(fname, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(csv_cols)
-        writer.writerows(csv_rows)
+    # Sync: approved users already in chat -> mark as JOINED
     try:
-        await message.answer_document(FSInputFile(fname), caption="Состав клана (joined) — CSV")
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("SELECT user_id FROM users WHERE status=?", (Status.APPROVED.value,))
+            ids = [r[0] for r in await cur.fetchall()]
+        for uid in ids[:100]:
+            await ensure_joined_if_member(uid)
     except Exception:
         pass
+    rows = await fetch_joined_players()
+    text = format_players_brief(rows)
+    await message.answer(text)
 
 @dp.callback_query(F.data.startswith("players:choose_faction"))
 async def on_players_choose_faction(call: CallbackQuery):
@@ -1916,7 +1889,7 @@ async def check_recruit_promotion_candidates():
         cur = await db.execute(
             "SELECT user_id, nickname, tg_link, joined_at FROM users "
             "WHERE status = ? AND faction = ? AND joined_at IS NOT NULL AND date(joined_at) <= date(?)",
-            ("joined", "Рекрут", threshold)
+            ("joined", "Fresh Meat", threshold)
         )
         rows = await cur.fetchall()
     for uid, nickname, tg_link, joined_at in rows:
@@ -1962,9 +1935,12 @@ async def check_birthdays_today():
 
 async def send_faction_notice(user_id: int, faction: str):
     texts = {
-        "Cranberry": "Твоя фракция изменена на Cranberry. Твой командир: Mukuru. Измени свой тэг на: ❀[BBa]",
-        "Blueberry": "Твоя фракция изменена на Blueberry. Твой командир: Buti. Измени свой тэг на: ❀[BBb]",
-        "Watermelon": "Твоя фракция изменена на Watermelon. Твой командир: Gadler. Измени свой тэг на: ❀[BBc]",
+        "Штаб": "Поздравляем! Ты избрано Богом, судьбой и Кичем. Твоя фракция: Штаб. Помни, ты ответственен за людей.",
+        "Black Hole": "Поздравляем! Твоя фракция изменена на Black Hole! Ты - элита клана. Твой командир: Chidori(@Bigchungusik)",
+        "Armless": "Поздравляем! Твоя фракция изменена на Armless. Твой командир: Lazy(@lazyprogramer)",
+        "Brainless": "Поздравляем! Твоя фракция изменена на Brainless. Твой командир: Zerox(@Sadz3ro)",
+        "Burning Assholes": "Поздравляем! Твоя фракция изменена на Burning Assholes. Твой командир: Fluffy_Racc00n(@Fluffy_Racc00n)",
+        "Useless cans": "Поздравляем! Твоя фракция изменена на Useless Cans. Твой командир: Gadler(@Gadler0)",
         "Резерв": "Ты переведен в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
     }
     text = texts.get(faction)
@@ -2019,7 +1995,7 @@ async def cmd_accept(message: Message):
         return
 
     # Set APPROVED and default faction if empty
-    faction = user.get("faction") or "Рекрут"
+    faction = user.get("faction") or "Fresh Meat"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
@@ -2039,8 +2015,9 @@ async def cmd_accept(message: Message):
         try:
             await bot.send_message(
                 target_id,
-                "Необходимо поставить тег в игре: ❀[BBr]\n\n"
-                "Названия тренировочных серверов и пароли от них\n"
+                "Необходимо поставить тег в игре: [BBr]\n"
+                "Твой командир: Gocha(@Bagman7)\n\n"
+                "Названия тренировочных серверов и пароли от них:\n"
                 "Blackberry | Training - Blackberries #1 0106\n"
                 "Blackberry | Training- Strawberries #2 7848\n"
                 "Blackberry | Training- Blueberries #3 9723\n"
@@ -2212,227 +2189,88 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     return kb.adjust(1).as_markup()
 
 
-@dp.message(ReserveReturnStates.waiting_date)
-async def on_reserve_date_entered(message: Message, state: FSMContext):
-    txt = (message.text or "").strip()
-    from datetime import datetime as _dt
-    try:
-        dt = _dt.strptime(txt, "%d.%m.%Y").date()
-    except Exception:
-        await message.answer("❌ Неверный формат. Введите ДД.ММ.ГГГГ, например: 25.12.2025")
-        return
-    data = await state.get_data()
-    uid = data.get("reserve_user_id")
-    if not uid:
-        await message.answer("Не удалось определить игрока. Повторите установку фракции 'Резерв'.")
-        await state.clear()
-        return
-    # Save the date to DB
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS reserve_returns (
-                    user_id INTEGER PRIMARY KEY,
-                    return_date TEXT NOT NULL,   -- YYYY-MM-DD
-                    created_at TEXT NOT NULL
-                )
-            """)
-            await db.execute(
-                "INSERT INTO reserve_returns(user_id, return_date, created_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(user_id) DO UPDATE SET return_date=excluded.return_date, created_at=excluded.created_at",
-                (uid, dt.isoformat(), datetime.utcnow().isoformat())
-            )
-            await db.commit()
-        await message.answer(f"✅ Дата возврата для игрока {uid} установлена: {dt.strftime('%d.%m.%Y')}")
-    except Exception as e:
-        await message.answer(f"Ошибка сохранения даты: {e}")
-    await state.clear()
-
-
-async def check_reserve_returns_tomorrow():
-    # Notify admins/moderators at 11:00 MSK about players returning tomorrow
-    try:
-        from zoneinfo import ZoneInfo
-        msk = ZoneInfo("Europe/Moscow")
-    except Exception:
-        msk = None
-    today_msk = (datetime.now(msk) if msk else datetime.utcnow()).date()
-    from datetime import timedelta as _td
-    tomorrow = (today_msk + _td(days=1)).isoformat()
-    users_to_notify = []
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS reserve_returns (
-                user_id INTEGER PRIMARY KEY,
-                return_date TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        cur = await db.execute("SELECT user_id FROM reserve_returns WHERE return_date = ?", (tomorrow,))
-        ids = [r[0] for r in await cur.fetchall()]
-        if ids:
-            q = f"SELECT user_id, nickname FROM users WHERE user_id IN ({','.join(['?']*len(ids))})"
-            cur = await db.execute(q, ids)
-            users_to_notify = await cur.fetchall()
-    if not users_to_notify:
-        return
-    for uid, nick in users_to_notify:
-        name = nick or str(uid)
-        msg = f"Игрок "{name}" должен вернуться завтра. Свяжитесь с ним"
-        try:
-            await notify_staff(msg)
-        except Exception:
-            # Fallback direct DM
-            try:
-                all_ids = list(ADMIN_IDS | MODERATOR_IDS)
-                for mid in all_ids:
-                    try:
-                        await bot.send_message(mid, msg)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-
-# Register daily reminder at 11:00 MSK (if scheduler is present)
-try:
-    scheduler.add_job(check_reserve_returns_tomorrow, CronTrigger(hour=11, minute=0, timezone="Europe/Moscow"))
-except Exception:
-    pass
-
-
-# ============== BB MAIN MENU (joined-only). Non-destructive block ==============
-
-def bb_persistent_menu_kb() -> ReplyKeyboardMarkup:
+def persistent_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие…",
     )
 
-def bb_main_menu_inline_kb() -> InlineKeyboardMarkup:
+
+def main_menu_inline_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔄 Изменить статус посещения", callback_data="bb:mm:att")
+    kb.button(text="🔄 Изменить статус посещения", callback_data="mm:att")
     kb.row()
-    kb.button(text="📇 Важные контакты", callback_data="bb:mm:contacts")
-    kb.button(text="📅 Предстоящие ивенты", callback_data="bb:mm:events")
+    kb.button(text="📇 Важные контакты", callback_data="mm:contacts")
+    kb.button(text="📅 Предстоящие ивенты", callback_data="mm:events")
     kb.row()
     kb.button(text="🟢 Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.row()
     kb.button(text="🟠 Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
     return kb.as_markup()
 
-async def bb_can_show_menu(message: Message) -> bool:
+
+async def _show_main_menu(message: Message):
+    user = await get_user(message.from_user.id)
+    status = (user.get("status") if isinstance(user, dict) else None) or ""
+    if status.lower() != "joined":
+        await message.answer("Меню доступно только вступившим игрокам.")
+        return
+    await message.answer("Выберите раздел:", reply_markup=main_menu_inline_kb())
+
+
+async def _install_persistent_menu_if_joined(message: Message):
     try:
         user = await get_user(message.from_user.id)
     except Exception:
         user = None
     status = (user.get("status") if isinstance(user, dict) else None) or ""
     if status.lower() != "joined":
-        await message.answer("Меню доступно только вступившим игрокам.")
-        return False
-    return True
-
-async def bb_show_main_menu(message: Message):
-    if not await bb_can_show_menu(message):
         return
-    await message.answer("Выберите раздел:", reply_markup=bb_main_menu_inline_kb())
-
-# --- dp handlers ---
-@dp.message(Command("start"))
-async def bb_on_start_show_button(message: Message):
-    # Install reply button for joined users
     try:
-        if await bb_can_show_menu(message):
-            await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_persistent_menu_kb())
+        await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=persistent_menu_kb())
     except Exception:
         pass
 
+
+@dp.message(Command("start"))
+async def _dp_start_menu_button(message: Message):
+    await _install_persistent_menu_if_joined(message)
+
+
 @dp.message(Command("menu"))
-async def bb_on_menu_cmd(message: Message):
-    await bb_show_main_menu(message)
+async def _dp_cmd_menu(message: Message):
+    await _show_main_menu(message)
+
 
 @dp.message(F.text == "🏠 Главное меню")
-async def bb_on_menu_text(message: Message):
-    await bb_show_main_menu(message)
+async def _dp_on_main_menu_button(message: Message):
+    await _show_main_menu(message)
 
-# --- dp callbacks ---
-@dp.callback_query(F.data == "bb:mm:att")
-async def bb_on_mm_att(cb: CallbackQuery):
-    # try to reuse existing training_kb(date_str)
+
+@dp.callback_query(F.data == "mm:att")
+async def _dp_mm_att(cb: CallbackQuery):
     try:
         from zoneinfo import ZoneInfo
-        msk = ZoneInfo("Europe/Moscow")
-        date_str = datetime.now(msk).date().isoformat()
+        from datetime import datetime as _dt
+        date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
     except Exception:
-        date_str = datetime.utcnow().date().isoformat()
+        from datetime import datetime as _dt
+        date_str = _dt.utcnow().date().isoformat()
     try:
         kb = training_kb(date_str)
     except Exception:
-        # Fallback empty kb (so UI doesn't break even if training_kb not found)
         kb = InlineKeyboardBuilder().as_markup()
     await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
     await cb.answer()
 
-@dp.callback_query(F.data == "bb:mm:contacts")
-async def bb_on_mm_contacts(cb: CallbackQuery):
-    await cb.message.edit_text("Скоро будет заполнено", reply_markup=bb_main_menu_inline_kb())
+
+@dp.callback_query(F.data == "mm:contacts")
+async def on_mm_contacts(cb: CallbackQuery):
+    await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
     await cb.answer()
 
-@dp.callback_query(F.data == "bb:mm:events")
-async def bb_on_mm_events(cb: CallbackQuery):
-    await cb.message.edit_text("Скоро будет заполнено", reply_markup=bb_main_menu_inline_kb())
+@dp.callback_query(F.data == "mm:events")
+async def on_mm_events(cb: CallbackQuery):
+    await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
     await cb.answer()
-
-@dp.callback_query(F.data == "bb:mm:pwd")
-async def bb_on_mm_pwd(cb: CallbackQuery):
-    await cb.answer("Пароль от сервера 0106", show_alert=True)
-
-# --- router mirrors (if project uses Router) ---
-try:
-    router  # type: ignore
-except NameError:
-    router = None
-
-if router:
-    @router.message(Command("start"))
-    async def r_bb_on_start_show_button(message: Message):
-        try:
-            if await bb_can_show_menu(message):
-                await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_persistent_menu_kb())
-        except Exception:
-            pass
-
-    @router.message(Command("menu"))
-    async def r_bb_on_menu_cmd(message: Message):
-        await bb_show_main_menu(message)
-
-    @router.message(F.text == "🏠 Главное меню")
-    async def r_bb_on_menu_text(message: Message):
-        await bb_show_main_menu(message)
-
-    @router.callback_query(F.data == "bb:mm:att")
-    async def r_bb_on_mm_att(cb: CallbackQuery):
-        try:
-            from zoneinfo import ZoneInfo
-            msk = ZoneInfo("Europe/Moscow")
-            date_str = datetime.now(msk).date().isoformat()
-        except Exception:
-            date_str = datetime.utcnow().date().isoformat()
-        try:
-            kb = training_kb(date_str)
-        except Exception:
-            kb = InlineKeyboardBuilder().as_markup()
-        await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
-        await cb.answer()
-
-    @dp.callback_query(F.data == "mm:contacts")
-    async def on_mm_contacts(cb: CallbackQuery):
-        await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
-        await cb.answer()
-
-    @dp.callback_query(F.data == "mm:events")
-    async def on_mm_events(cb: CallbackQuery):
-        await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
-        await cb.answer()
-
