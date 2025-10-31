@@ -2274,3 +2274,139 @@ async def on_mm_contacts(cb: CallbackQuery):
 async def on_mm_events(cb: CallbackQuery):
     await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
     await cb.answer()
+
+
+# ===================== BB: Главное меню для игроков (joined-only) =====================
+# Уникальные имена (bb_*) — не мешают существующим хендлерам. Код только добавляется.
+
+def bb_persistent_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
+        resize_keyboard=True,
+        input_field_placeholder="Выберите действие…",
+    )
+
+def bb_main_menu_inline_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔄 Изменить статус посещения", callback_data="bb:mm:att")
+    kb.row()
+    kb.button(text="📇 Важные контакты", callback_data="bb:mm:contacts")
+    kb.button(text="📅 Предстоящие ивенты", callback_data="bb:mm:events")
+    kb.row()
+    kb.button(text="🟢 Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
+    kb.row()
+    kb.button(text="🟠 Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    return kb.as_markup()
+
+async def bb_can_show_menu(message: Message) -> bool:
+    try:
+        user = await get_user(message.from_user.id)
+    except Exception:
+        user = None
+    status = (user.get("status") if isinstance(user, dict) else None) or ""
+    if status.lower() != "joined":
+        await message.answer("Меню доступно только вступившим игрокам.")
+        return False
+    return True
+
+async def bb_show_main_menu(message: Message):
+    if not await bb_can_show_menu(message):
+        return
+    await message.answer("Выберите раздел:", reply_markup=bb_main_menu_inline_kb())
+
+# ===== dp handlers =====
+@dp.message(Command("start"))
+async def bb_on_start_attach_button(message: Message):
+    # Выдать постоянную кнопку главного меню только joined
+    try:
+        if await bb_can_show_menu(message):
+            await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_persistent_menu_kb())
+    except Exception:
+        pass
+
+@dp.message(Command("menu"))
+async def bb_on_menu_cmd(message: Message):
+    await bb_show_main_menu(message)
+
+@dp.message(F.text == "🏠 Главное меню")
+async def bb_on_menu_text(message: Message):
+    await bb_show_main_menu(message)
+
+# ===== callbacks =====
+@dp.callback_query(F.data == "bb:mm:att")
+async def bb_on_mm_att(cb: CallbackQuery):
+    # Используем существующую клавиатуру тренировки на сегодня, если она есть
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+    except Exception:
+        from datetime import datetime as _dt
+        date_str = _dt.utcnow().date().isoformat()
+    try:
+        kb = training_kb(date_str)
+    except Exception:
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        kb = InlineKeyboardBuilder().as_markup()
+    await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
+    await cb.answer()
+
+    @dp.callback_query(F.data == "mm:contacts")
+    async def on_mm_contacts(cb: CallbackQuery):
+        await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
+        await cb.answer()
+
+    @dp.callback_query(F.data == "mm:events")
+    async def on_mm_events(cb: CallbackQuery):
+        await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
+        await cb.answer()
+
+# ===== Router mirrors (если используется aiogram Router) =====
+try:
+    router  # type: ignore
+except NameError:
+    router = None
+
+if router:
+    @router.message(Command("start"))
+    async def r_bb_on_start_attach_button(message: Message):
+        try:
+            if await bb_can_show_menu(message):
+                await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_persistent_menu_kb())
+        except Exception:
+            pass
+
+    @router.message(Command("menu"))
+    async def r_bb_on_menu_cmd(message: Message):
+        await bb_show_main_menu(message)
+
+    @router.message(F.text == "🏠 Главное меню")
+    async def r_bb_on_menu_text(message: Message):
+        await bb_show_main_menu(message)
+
+    @router.callback_query(F.data == "bb:mm:att")
+    async def r_bb_on_mm_att(cb: CallbackQuery):
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime as _dt
+            date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+        except Exception:
+            from datetime import datetime as _dt
+            date_str = _dt.utcnow().date().isoformat()
+        try:
+            kb = training_kb(date_str)
+        except Exception:
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            kb = InlineKeyboardBuilder().as_markup()
+        await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
+        await cb.answer()
+
+    @dp.callback_query(F.data == "mm:contacts")
+    async def on_mm_contacts(cb: CallbackQuery):
+        await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
+        await cb.answer()
+
+    @dp.callback_query(F.data == "mm:events")
+    async def on_mm_events(cb: CallbackQuery):
+        await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
+        await cb.answer()
