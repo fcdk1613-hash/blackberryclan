@@ -12,7 +12,10 @@ from typing import Optional, Tuple, List
 import aiosqlite
 import csv
 from aiogram import Bot, Dispatcher, F
+from aiogram import F
+from aiogram.types import Message
 from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.types import CallbackQuery
 
 from aiogram.client.default import DefaultBotProperties
@@ -2217,9 +2220,17 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
 
-# ===================== Главное меню (для вступивших игроков) =====================
 
-def main_menu_kb() -> InlineKeyboardMarkup:
+# ===================== Главное меню для игроков (joined) =====================
+
+def persistent_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
+        resize_keyboard=True,
+        input_field_placeholder="Выберите действие…",
+    )
+
+def main_menu_inline_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🔄 Изменить статус посещения", callback_data="mm:att")
     kb.row()
@@ -2231,28 +2242,63 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     kb.button(text="🟠 Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
     return kb.as_markup()
 
-@dp.message(Command("menu"))
-async def cmd_menu(message: Message):
+async def _show_main_menu(message: Message):
     user = await get_user(message.from_user.id)
     if not user or (user.get("status") or "").lower() != "joined":
         await message.answer("Меню доступно только вступившим игрокам.")
         return
-    await message.answer("Выберите раздел:", reply_markup=main_menu_kb())
+    try:
+        await message.answer("Выберите раздел:", reply_markup=main_menu_inline_kb())
+    except Exception:
+        await message.answer("Выберите раздел:")
 
+# Показываем кнопку всегда на /start для joined
+@dp.message(Command("start"))
+async def start_attach_main_menu_button(message: Message):
+    try:
+        user = await get_user(message.from_user.id)
+    except Exception:
+        user = None
+    if not user or (user.get("status") or "").lower() != "joined":
+        return
+    try:
+        await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=persistent_menu_kb())
+    except Exception:
+        pass
+
+# Открытие меню командами/кнопкой
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    await _show_main_menu(message)
+
+@dp.message(F.text == "🏠 Главное меню")
+async def on_main_menu_button(message: Message):
+    await _show_main_menu(message)
+
+# --- callbacks ---
 @dp.callback_query(F.data == "mm:att")
 async def on_mm_att(cb: CallbackQuery):
-    from zoneinfo import ZoneInfo
-    date_str = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
-    await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=training_kb(date_str))
+    try:
+        from zoneinfo import ZoneInfo
+        msk = ZoneInfo("Europe/Moscow")
+        date_str = datetime.now(msk).date().isoformat()
+    except Exception:
+        date_str = datetime.utcnow().date().isoformat()
+    try:
+        kb = training_kb(date_str)
+    except Exception:
+        kb = InlineKeyboardBuilder().as_markup()
+    await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data == "mm:contacts")
 async def on_mm_contacts(cb: CallbackQuery):
-    await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_kb())
+    await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "mm:events")
 async def on_mm_events(cb: CallbackQuery):
-    await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_kb())
+    await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
     await cb.answer()
+
 
