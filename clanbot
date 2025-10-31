@@ -976,7 +976,7 @@ async def on_approve(call: CallbackQuery):
         await call.answer("Заявка уже отклонена ранее.", show_alert=True)
         return
 
-    faction = user.get("faction") or "Рекрут"
+    faction = user.get("faction") or "Fresh Meat"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
