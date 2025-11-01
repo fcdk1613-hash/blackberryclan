@@ -10,13 +10,8 @@ from datetime import datetime, timedelta, date
 from enum import Enum
 from typing import Optional, Tuple, List
 import aiosqlite
+import csv
 from aiogram import Bot, Dispatcher, F
-from aiogram import F
-from aiogram.types import Message
-from aiogram.types import InlineKeyboardMarkup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.types import CallbackQuery
-
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
 from aiogram.fsm.context import FSMContext
@@ -1415,18 +1410,48 @@ async def cmd_players(message: Message):
         await message.answer("Только модераторы/администраторы.")
         return
 
-    # Sync: approved users already in chat -> mark as JOINED
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(1) FROM users WHERE status=?", ("joined",))
+        total_joined = (await cur.fetchone())[0]
+
+        cur = await db.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(faction), ''), '—') AS fac, COUNT(1) AS c
+            FROM users
+            WHERE status = 'joined'
+            GROUP BY fac
+            ORDER BY c DESC, fac ASC
+            """
+        )
+        faction_rows = await cur.fetchall()
+
+        cur = await db.execute(
+            """
+            SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
+            FROM users
+            WHERE status = 'joined'
+            ORDER BY clan_id ASC
+            """
+        )
+        csv_rows = await cur.fetchall()
+        csv_cols = [d[0] for d in cur.description]
+
+    lines = [f"<b>Игроки клана (вступившие)</b>", f"Всего: <b>{total_joined}</b>"]
+    if faction_rows:
+        lines.append("По фракциям:")
+        for fac, c in faction_rows:
+            lines.append(f"• {fac}: {c}")
+    await message.answer("\n".join(lines))
+
+    fname = f"clan_joined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    with open(fname, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(csv_cols)
+        writer.writerows(csv_rows)
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT user_id FROM users WHERE status=?", (Status.APPROVED.value,))
-            ids = [r[0] for r in await cur.fetchall()]
-        for uid in ids[:100]:
-            await ensure_joined_if_member(uid)
+        await message.answer_document(FSInputFile(fname), caption="Состав клана (joined) — CSV")
     except Exception:
         pass
-    rows = await fetch_joined_players()
-    text = format_players_brief(rows)
-    await message.answer(text)
 
 @dp.callback_query(F.data.startswith("players:choose_faction"))
 async def on_players_choose_faction(call: CallbackQuery):
@@ -1517,6 +1542,7 @@ async def send_evening_training_poll():
             """
             SELECT u.user_id FROM users u
             WHERE u.status = ?
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
               AND NOT EXISTS (
                 SELECT 1 FROM training_attendance t
                 WHERE t.user_id = u.user_id AND t.date = ?
@@ -1541,7 +1567,7 @@ async def check_training_inactive_3days():
             """
             SELECT u.user_id FROM users u
             WHERE u.status = ?
-              AND (u.fraction IS NULL OR u.fraction != 'Резерв')
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
               AND u.user_id NOT IN (
                 SELECT DISTINCT user_id FROM training_attendance
                 WHERE date IN (?,?,?)
@@ -1580,7 +1606,7 @@ async def send_daily_training_poll():
     kb = training_kb(date_str)
     # send to all active users (exclude removed)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT user_id FROM users WHERE status = ?", ("joined",))
+        cur = await db.execute("SELECT user_id FROM users WHERE status = ? AND (faction IS NULL OR faction != 'Резерв')", ("joined",))
         ids = [r[0] for r in await cur.fetchall()]
     for uid in ids:
         try:
@@ -2187,296 +2213,3 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
-
-
-def persistent_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
-        resize_keyboard=True,
-        input_field_placeholder="Выберите действие…",
-    )
-
-
-def main_menu_inline_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔄 Изменить статус посещения", callback_data="mm:att")
-    kb.row()
-    kb.button(text="📇 Важные контакты", callback_data="mm:contacts")
-    kb.button(text="📅 Предстоящие ивенты", callback_data="mm:events")
-    kb.row()
-    kb.button(text="🟢 Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
-    kb.row()
-    kb.button(text="🟠 Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
-    return kb.as_markup()
-
-
-async def _show_main_menu(message: Message):
-    user = await get_user(message.from_user.id)
-    status = (user.get("status") if isinstance(user, dict) else None) or ""
-    if status.lower() != "joined":
-        await message.answer("Меню доступно только вступившим игрокам.")
-        return
-    await message.answer("Выберите раздел:", reply_markup=main_menu_inline_kb())
-
-
-async def _install_persistent_menu_if_joined(message: Message):
-    try:
-        user = await get_user(message.from_user.id)
-    except Exception:
-        user = None
-    status = (user.get("status") if isinstance(user, dict) else None) or ""
-    if status.lower() != "joined":
-        return
-    try:
-        await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=persistent_menu_kb())
-    except Exception:
-        pass
-
-
-@dp.message(Command("start"))
-async def _dp_start_menu_button(message: Message):
-    await _install_persistent_menu_if_joined(message)
-
-
-@dp.message(Command("menu"))
-async def _dp_cmd_menu(message: Message):
-    await _show_main_menu(message)
-
-
-@dp.message(F.text == "🏠 Главное меню")
-async def _dp_on_main_menu_button(message: Message):
-    await _show_main_menu(message)
-
-
-@dp.callback_query(F.data == "mm:att")
-async def _dp_mm_att(cb: CallbackQuery):
-    try:
-        from zoneinfo import ZoneInfo
-        from datetime import datetime as _dt
-        date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
-    except Exception:
-        from datetime import datetime as _dt
-        date_str = _dt.utcnow().date().isoformat()
-    try:
-        kb = training_kb(date_str)
-    except Exception:
-        kb = InlineKeyboardBuilder().as_markup()
-    await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "mm:contacts")
-async def on_mm_contacts(cb: CallbackQuery):
-    await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
-    await cb.answer()
-
-@dp.callback_query(F.data == "mm:events")
-async def on_mm_events(cb: CallbackQuery):
-    await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
-    await cb.answer()
-
-
-# ===================== BB: Главное меню для игроков (joined-only) =====================
-# Уникальные имена (bb_*) — не мешают существующим хендлерам. Код только добавляется.
-
-def bb_persistent_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
-        resize_keyboard=True,
-        input_field_placeholder="Выберите действие…",
-    )
-
-def bb_main_menu_inline_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔄 Изменить статус посещения", callback_data="bb:mm:att")
-    kb.row()
-    kb.button(text="📇 Важные контакты", callback_data="bb:mm:contacts")
-    kb.button(text="📅 Предстоящие ивенты", callback_data="bb:mm:events")
-    kb.row()
-    kb.button(text="🟢 Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
-    kb.row()
-    kb.button(text="🟠 Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
-    return kb.as_markup()
-
-async def bb_can_show_menu(message: Message) -> bool:
-    try:
-        user = await get_user(message.from_user.id)
-    except Exception:
-        user = None
-    status = (user.get("status") if isinstance(user, dict) else None) or ""
-    if status.lower() != "joined":
-        await message.answer("Меню доступно только вступившим игрокам.")
-        return False
-    return True
-
-async def bb_show_main_menu(message: Message):
-    if not await bb_can_show_menu(message):
-        return
-    await message.answer("Выберите раздел:", reply_markup=bb_main_menu_inline_kb())
-
-# ===== dp handlers =====
-@dp.message(Command("start"))
-async def bb_on_start_attach_button(message: Message):
-    # Выдать постоянную кнопку главного меню только joined
-    try:
-        if await bb_can_show_menu(message):
-            await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_persistent_menu_kb())
-    except Exception:
-        pass
-
-@dp.message(Command("menu"))
-async def bb_on_menu_cmd(message: Message):
-    await bb_show_main_menu(message)
-
-@dp.message(F.text == "🏠 Главное меню")
-async def bb_on_menu_text(message: Message):
-    await bb_show_main_menu(message)
-
-# ===== callbacks =====
-@dp.callback_query(F.data == "bb:mm:att")
-async def bb_on_mm_att(cb: CallbackQuery):
-    # Используем существующую клавиатуру тренировки на сегодня, если она есть
-    try:
-        from zoneinfo import ZoneInfo
-        from datetime import datetime as _dt
-        date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
-    except Exception:
-        from datetime import datetime as _dt
-        date_str = _dt.utcnow().date().isoformat()
-    try:
-        kb = training_kb(date_str)
-    except Exception:
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
-        kb = InlineKeyboardBuilder().as_markup()
-    await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
-    await cb.answer()
-
-    @dp.callback_query(F.data == "mm:contacts")
-    async def on_mm_contacts(cb: CallbackQuery):
-        await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
-        await cb.answer()
-
-    @dp.callback_query(F.data == "mm:events")
-    async def on_mm_events(cb: CallbackQuery):
-        await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
-        await cb.answer()
-
-# ===== Router mirrors (если используется aiogram Router) =====
-try:
-    router  # type: ignore
-except NameError:
-    router = None
-
-if router:
-    @router.message(Command("start"))
-    async def r_bb_on_start_attach_button(message: Message):
-        try:
-            if await bb_can_show_menu(message):
-                await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=bb_persistent_menu_kb())
-        except Exception:
-            pass
-
-    @router.message(Command("menu"))
-    async def r_bb_on_menu_cmd(message: Message):
-        await bb_show_main_menu(message)
-
-    @router.message(F.text == "🏠 Главное меню")
-    async def r_bb_on_menu_text(message: Message):
-        await bb_show_main_menu(message)
-
-    @router.callback_query(F.data == "bb:mm:att")
-    async def r_bb_on_mm_att(cb: CallbackQuery):
-        try:
-            from zoneinfo import ZoneInfo
-            from datetime import datetime as _dt
-            date_str = _dt.now(ZoneInfo("Europe/Moscow")).date().isoformat()
-        except Exception:
-            from datetime import datetime as _dt
-            date_str = _dt.utcnow().date().isoformat()
-        try:
-            kb = training_kb(date_str)
-        except Exception:
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
-            kb = InlineKeyboardBuilder().as_markup()
-        await cb.message.edit_text(f"Изменить статус посещения тренировки на сегодня ({date_str}):", reply_markup=kb)
-        await cb.answer()
-
-    @dp.callback_query(F.data == "mm:contacts")
-    async def on_mm_contacts(cb: CallbackQuery):
-        await cb.message.edit_text("Глава клана: Keech(@Wingmad)\nПервый заместитель главы клана: Bambozy(@jskapy)\nЗаместитель главы клана по воспитательной работе: Buti(@user_r10)\nНачальник штаба клана: Muruku(@Mukuru0w0)\nГлава школы Blackberry: Blizzardix(@Blizzardrix)", reply_markup=main_menu_inline_kb())
-        await cb.answer()
-
-    @dp.callback_query(F.data == "mm:events")
-    async def on_mm_events(cb: CallbackQuery):
-        await cb.message.edit_text("Fruit Cup Season #1\nДаты проведения: 07.11-09.11\nФормат: Кубок\nРегистрация окончена", reply_markup=main_menu_inline_kb())
-        await cb.answer()
-
-
-# === BB ALWAYS-ON MAIN MENU (joined-only, aiogram 3.x, non-destructive) ===
-# Гарантирует, что у joined-игроков ВСЕГДА есть reply-кнопка «🏠 Главное меню» в приватном чате.
-# Ничего не удаляет и не переопределяет — просто добавляет отдельные обработчики dp/router.
-
-from typing import Set
-
-_BB_MENU_INSTALLED: Set[int] = set()
-
-def _bb_reply_main_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
-        resize_keyboard=True,
-        input_field_placeholder="Выберите действие…",
-    )
-
-async def _bb_is_joined(user_id: int) -> bool:
-    # Пробуем вашу get_user(); если нет — считаем, что не joined (не вмешиваемся).
-    try:
-        u = await get_user(user_id)  # type: ignore
-        if u and (u.get("status") or "").lower() == "joined":
-            return True
-    except Exception:
-        return False
-    return False
-
-@dp.message()  # aiogram 3.x: без фильтров — ловим любое сообщение
-async def _bb_attach_menu_any_message(message: Message):
-    try:
-        if getattr(message.chat, "type", "") != "private":
-            return
-        if not getattr(message, "from_user", None):
-            return
-        uid = message.from_user.id
-        # Один раз на пользователя за процесс, чтобы не спамить
-        if uid in _BB_MENU_INSTALLED:
-            return
-        if not await _bb_is_joined(uid):
-            return
-        await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=_bb_reply_main_menu_kb())
-        _BB_MENU_INSTALLED.add(uid)
-    except Exception:
-        # Ничего не ломаем, пропускаем
-        pass
-
-# Зеркальный обработчик для Router(), если он используется в проекте
-try:
-    router  # type: ignore
-except NameError:
-    router = None
-
-if router:
-    @router.message()
-    async def _bb_attach_menu_any_message_r(message: Message):
-        try:
-            if getattr(message.chat, "type", "") != "private":
-                return
-            if not getattr(message, "from_user", None):
-                return
-            uid = message.from_user.id
-            if uid in _BB_MENU_INSTALLED:
-                return
-            if not await _bb_is_joined(uid):
-                return
-            await message.answer("Главное меню доступно по кнопке ниже.", reply_markup=_bb_reply_main_menu_kb())
-            _BB_MENU_INSTALLED.add(uid)
-        except Exception:
-            pass
-
