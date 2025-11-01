@@ -2237,6 +2237,11 @@ async def cmd_menu(message: Message):
         return
     await message.answer("<b>Главное меню</b>", reply_markup=main_menu_kb())
 
+@dp.message(F.text.startswith("/menu"))
+async def cmd_menu_fallback(message: Message):
+    # Fallback in case Telegram sends a plain-text '/menu' update without Command filter
+    await cmd_menu(message)
+
 @dp.callback_query(F.data.startswith("menu:"))
 async def on_menu_action(call: CallbackQuery):
     # permissions
