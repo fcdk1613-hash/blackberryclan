@@ -2251,7 +2251,7 @@ try:
         BotCommand(command="menu", description="Главное меню"),
         BotCommand(command="profile", description="Ваш профиль"),
         BotCommand(command="help", description="Помощь"),
-    ])
+
 except Exception:
     pass
     # Scheduler for training polls and inactivity checks
