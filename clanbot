@@ -27,6 +27,8 @@ from aiogram.types import (
     CallbackQuery,
     ChatInviteLink,
     FSInputFile,
+    BotCommand,
+    MenuButtonCommands,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -2160,10 +2162,96 @@ async def cmd_seed(message: Message):
     await message.answer(f"Готово. Отправлено: {sent} | Не доставлено: {failed}.")
 
 
+
+# ======= Main Menu (players, status=joined) =======
+def is_joined_status(u: dict | None) -> bool:
+    try:
+        return bool(u and (u.get("status") == Status.JOINED.value or u.get("status") == "joined"))
+    except Exception:
+        return False
+
+def players_main_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Изменить статус посещения", callback_data="menu:attendance")
+    kb.button(text="📇 Важные контакты", callback_data="menu:contacts")
+    kb.button(text="📅 Предстоящие ивенты", callback_data="menu:events")
+    kb.row()
+    kb.button(text="🟢 Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
+    kb.button(text="🛠️ Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    return kb.adjust(1).as_markup()
+
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    user = await get_user(message.from_user.id)
+    if not is_joined_status(user):
+        await message.answer("⛔ Меню доступно только участникам клана (status=joined).")
+        return
+    await message.answer("<b>Главное меню</b>", reply_markup=players_main_menu_kb())
+
+@dp.callback_query(F.data.startswith("menu:"))
+async def on_menu_click(call: CallbackQuery):
+    user = await get_user(call.from_user.id)
+    if not is_joined_status(user):
+        try:
+            await call.answer("Меню доступно только участникам (joined).", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    key = call.data.split(":", 1)[1]
+    # Attendance change -> show today's training keyboard (MSK)
+    if key == "attendance":
+        msk = ZoneInfo("Europe/Moscow")
+        today = datetime.now(msk).date().isoformat()
+        try:
+            await call.message.answer(f"Выберите новый ответ на сегодня ({today}):", reply_markup=training_kb(today))
+        except Exception:
+            pass
+        try:
+            await call.answer()
+        except Exception:
+            pass
+        return
+
+    if key == "contacts":
+        try:
+            await call.message.answer("Скоро будет заполнено")
+        except Exception:
+            pass
+        try:
+            await call.answer()
+        except Exception:
+            pass
+        return
+
+    if key == "events":
+        try:
+            await call.message.answer("Скоро будет заполнено")
+        except Exception:
+            pass
+        try:
+            await call.answer()
+        except Exception:
+            pass
+        return
+
 async def main():
     await init_db()
     await ensure_training_tables()
-    logging.info("DB initialized at %s", DB_PATH)
+
+# Set MenuButton to show commands and register /menu so the button is always visible
+try:
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+except Exception:
+    pass
+try:
+    await bot.set_my_commands([
+        BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="profile", description="Ваш профиль"),
+        BotCommand(command="help", description="Помощь"),
+    ])
+except Exception:
+    pass
     # Scheduler for training polls and inactivity checks
     try:
         scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
