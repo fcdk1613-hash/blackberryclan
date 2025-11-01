@@ -1226,13 +1226,6 @@ def stats_kb() -> InlineKeyboardMarkup:
     return kb.adjust(1).as_markup()
 
 @dp.message(F.text == "/stats")
-
-@dp.message(F.text == "/menu")
-async def cmd_menu_plain(message: Message):
-    if not await _is_joined(message.from_user.id):
-        await message.answer("❌ Меню доступно только игрокам со статусом joined.")
-        return
-    await message.answer("<b>Главное меню</b>", reply_markup=main_menu_kb())
 async def cmd_stats(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
@@ -2188,11 +2181,6 @@ async def main():
 
     await dp.start_polling(bot)
 
-
-# ======= Player Menu (joined only) =======
-
-
-
 if __name__ == "__main__":
     try:
         asyncio.run(main())
@@ -2225,62 +2213,3 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
-
-
-def main_menu_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Изменить статус посещения", callback_data="menu:attendance")
-    kb.button(text="Важные контакты", callback_data="menu:contacts")
-    kb.button(text="Предстоящие ивенты", callback_data="menu:events")
-    kb.row()
-    kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
-    kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
-    return kb.adjust(1).as_markup()
-
-async def _is_joined(uid: int) -> bool:
-    user = await get_user(uid)
-    return bool(user and (user.get("status") == Status.JOINED.value))
-
-@dp.message(Command("menu"))
-
-@dp.message(Command(commands=["menu"]))
-async def cmd_menu_alt(message: Message):
-    await cmd_menu(message)
-
-@dp.message(F.text.regexp(r"^/menu(?:@\w+)?(?:\s|$)"))
-async def cmd_menu_regex(message: Message):
-    await cmd_menu(message)
-async def cmd_menu(message: Message):
-    if not await _is_joined(message.from_user.id):
-        await message.answer("❌ Меню доступно только игрокам со статусом joined.")
-        return
-    await message.answer("<b>Главное меню</b>", reply_markup=main_menu_kb())
-
-@dp.message(F.text.startswith("/menu"))
-async def cmd_menu_fallback(message: Message):
-    # Fallback in case Telegram sends a plain-text '/menu' update without Command filter
-    await cmd_menu(message)
-
-@dp.callback_query(F.data.startswith("menu:"))
-async def on_menu_action(call: CallbackQuery):
-    # permissions
-    if not await _is_joined(call.from_user.id):
-        await call.answer("Меню доступно только игрокам со статусом joined.", show_alert=True)
-        return
-    action = call.data.split(":", 1)[1]
-    if action == "attendance":
-        from zoneinfo import ZoneInfo
-        from datetime import datetime
-        msk = ZoneInfo("Europe/Moscow")
-        date_str = datetime.now(msk).date().isoformat()
-        text = f"Изменить ответ на сегодня ({date_str})"
-        try:
-            await call.message.edit_text(text, reply_markup=training_kb(date_str))
-        except Exception:
-            await call.message.answer(text, reply_markup=training_kb(date_str))
-        await call.answer()
-    elif action in ("contacts", "events"):
-        await call.answer()
-        await call.message.answer("Скоро будет заполнено")
-    else:
-        await call.answer("Неизвестное действие.", show_alert=True)
