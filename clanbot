@@ -595,6 +595,8 @@ async def got_tz(message: Message, state: FSMContext):
     await state.set_state(RegStates.waiting_tg_link)
 
 @dp.message(RegStates.waiting_tg_link)
+
+@dp.message(RegStates.waiting_tg_link)
 async def got_tg_link(message: Message, state: FSMContext):
     data = await state.update_data(tg_link=message.text.strip())
     data = await state.get_data()
@@ -1458,6 +1460,12 @@ async def on_players_choose_faction(call: CallbackQuery):
         return
     await call.message.edit_text("Выберите фракцию:", reply_markup=players_factions_kb(1))
     await call.answer()
+
+
+    # Уведомление игрока о смене фракции
+
+    await send_faction_notice(uid, faction)
+
 @dp.callback_query(F.data.startswith("players:"))
 async def on_players_list(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -2164,6 +2172,7 @@ async def main():
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
         
     # Daily checks: recruits 14d & birthdays (MSK)
+# Daily checks: recruits 14d & birthdays (MSK)
         scheduler.add_job(check_recruit_promotion_candidates, CronTrigger(hour=10, minute=0, timezone=ZoneInfo("Europe/Moscow")))
         scheduler.add_job(check_birthdays_today, CronTrigger(hour=9, minute=0, timezone=ZoneInfo("Europe/Moscow")))
         scheduler.start()
@@ -2204,3 +2213,50 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
+
+
+# ======= Player Menu (joined only) =======
+def main_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Изменить статус посещения", callback_data="menu:attendance")
+    kb.button(text="Важные контакты", callback_data="menu:contacts")
+    kb.button(text="Предстоящие ивенты", callback_data="menu:events")
+    kb.row()
+    kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
+    kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    return kb.adjust(1).as_markup()
+
+async def _is_joined(uid: int) -> bool:
+    user = await get_user(uid)
+    return bool(user and (user.get("status") == Status.JOINED.value))
+
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    if not await _is_joined(message.from_user.id):
+        await message.answer("❌ Меню доступно только игрокам со статусом joined.")
+        return
+    await message.answer("<b>Главное меню</b>", reply_markup=main_menu_kb())
+
+@dp.callback_query(F.data.startswith("menu:"))
+async def on_menu_action(call: CallbackQuery):
+    # permissions
+    if not await _is_joined(call.from_user.id):
+        await call.answer("Меню доступно только игрокам со статусом joined.", show_alert=True)
+        return
+    action = call.data.split(":", 1)[1]
+    if action == "attendance":
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        msk = ZoneInfo("Europe/Moscow")
+        date_str = datetime.now(msk).date().isoformat()
+        text = f"Изменить ответ на сегодня ({date_str})"
+        try:
+            await call.message.edit_text(text, reply_markup=training_kb(date_str))
+        except Exception:
+            await call.message.answer(text, reply_markup=training_kb(date_str))
+        await call.answer()
+    elif action in ("contacts", "events"):
+        await call.answer()
+        await call.message.answer("Скоро будет заполнено")
+    else:
+        await call.answer("Неизвестное действие.", show_alert=True)
