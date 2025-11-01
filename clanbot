@@ -2241,11 +2241,11 @@ async def main():
 
 # Set MenuButton to show commands and register /menu so the button is always visible
 try:
-    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+# (moved into main)     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 except Exception:
     pass
 try:
-    await bot.set_my_commands([
+# (moved into main)     await bot.set_my_commands([
         BotCommand(command="menu", description="Главное меню"),
         BotCommand(command="profile", description="Ваш профиль"),
         BotCommand(command="help", description="Помощь"),
