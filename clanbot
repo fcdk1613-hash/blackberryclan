@@ -1226,6 +1226,13 @@ def stats_kb() -> InlineKeyboardMarkup:
     return kb.adjust(1).as_markup()
 
 @dp.message(F.text == "/stats")
+
+@dp.message(F.text == "/menu")
+async def cmd_menu_plain(message: Message):
+    if not await _is_joined(message.from_user.id):
+        await message.answer("❌ Меню доступно только игрокам со статусом joined.")
+        return
+    await message.answer("<b>Главное меню</b>", reply_markup=main_menu_kb())
 async def cmd_stats(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
