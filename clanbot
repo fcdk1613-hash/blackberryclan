@@ -2231,6 +2231,14 @@ async def _is_joined(uid: int) -> bool:
     return bool(user and (user.get("status") == Status.JOINED.value))
 
 @dp.message(Command("menu"))
+
+@dp.message(Command(commands=["menu"]))
+async def cmd_menu_alt(message: Message):
+    await cmd_menu(message)
+
+@dp.message(F.text.regexp(r"^/menu(?:@\w+)?(?:\s|$)"))
+async def cmd_menu_regex(message: Message):
+    await cmd_menu(message)
 async def cmd_menu(message: Message):
     if not await _is_joined(message.from_user.id):
         await message.answer("❌ Меню доступно только игрокам со статусом joined.")
