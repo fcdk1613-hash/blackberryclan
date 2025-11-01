@@ -2181,6 +2181,11 @@ async def main():
 
     await dp.start_polling(bot)
 
+
+# ======= Player Menu (joined only) =======
+
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
@@ -2215,7 +2220,6 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     return kb.adjust(1).as_markup()
 
 
-# ======= Player Menu (joined only) =======
 def main_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="Изменить статус посещения", callback_data="menu:attendance")
