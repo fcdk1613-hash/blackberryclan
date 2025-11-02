@@ -123,8 +123,28 @@ def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
         ("command", "Штаб"),
     )
 
+
+# Settings storage (for admin-editable texts)
+CREATE_SETTINGS_SQL = \"\"\"
+CREATE TABLE IF NOT EXISTS bot_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+\"\"\"
+
+async def set_setting(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(\"INSERT INTO bot_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value\", (key, value))
+        await db.commit()
+
+async def get_setting(key: str, default: str | None = None) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(\"SELECT value FROM bot_settings WHERE key=?\", (key,)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else default
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(CREATE_SETTINGS_SQL)
         await db.execute(CREATE_USERS_SQL)
         await db.execute(CREATE_USERS_ARCHIVE_SQL)
         await db.execute(CREATE_REMOVE_TABLE_SQL)
@@ -2194,6 +2214,41 @@ def _is_joined_status(user: dict | None) -> bool:
     except Exception:
         return False
 
+
+
+# ======= ADMIN TEXT COMMANDS =======
+def _is_admin(user_id: int) -> bool:
+    try:
+        return int(user_id) in ADMIN_IDS
+    except Exception:
+        return False
+
+@dp.message(Command("ivent"))
+async def cmd_set_events_text(message: Message):
+    if not _is_admin(message.from_user.id):
+        await message.answer("Команда доступна только администраторам.")
+        return
+    # get text after command
+    arg = message.text.split(maxsplit=1)
+    if len(arg) == 1 or not arg[1].strip():
+        current = await get_setting("events_text", "Скоро будет заполнено")
+        await message.answer(f"Текущий текст для «Предстоящие ивенты»:\n\n{current}\n\nОтправьте: <code>/ivent новый текст</code>")
+        return
+    await set_setting("events_text", arg[1].strip())
+    await message.answer("Текст для «Предстоящие ивенты» обновлён.")
+
+@dp.message(Command("contacts"))
+async def cmd_set_contacts_text(message: Message):
+    if not _is_admin(message.from_user.id):
+        await message.answer("Команда доступна только администраторам.")
+        return
+    arg = message.text.split(maxsplit=1)
+    if len(arg) == 1 or not arg[1].strip():
+        current = await get_setting("contacts_text", "Скоро будет заполнено")
+        await message.answer(f"Текущий текст для «Полезные контакты»:\n\n{current}\n\nОтправьте: <code>/contacts новый текст</code>")
+        return
+    await set_setting("contacts_text", arg[1].strip())
+    await message.answer("Текст для «Полезные контакты» обновлён.")
 @dp.message(Command("menu"))
 async def cmd_menu(message: Message):
     user = await get_user(message.from_user.id)
@@ -2211,7 +2266,8 @@ async def on_menu_contacts(call: CallbackQuery):
         return
     # ответ в том же чате
     try:
-        await call.message.answer("Скоро будет заполнено")
+        txt = await get_setting("contacts_text", "Скоро будет заполнено")
+        await call.message.answer(txt)
     except Exception:
         pass
     await call.answer()
@@ -2224,7 +2280,8 @@ async def on_menu_events(call: CallbackQuery):
         await call.answer("Только для вступивших игроков.", show_alert=True)
         return
     try:
-        await call.message.answer("Скоро будет заполнено")
+        txt = await get_setting("events_text", "Скоро будет заполнено")
+        await call.message.answer(txt)
     except Exception:
         pass
     await call.answer()
@@ -2272,15 +2329,15 @@ async def main():
     except Exception:
         pass
 
-    try:
-        await bot.set_my_commands([
-            BotCommand(command="start", description="Регистрация"),
-            BotCommand(command="profile", description="Профиль"),
-            BotCommand(command="menu", description="Меню клана"),
-            BotCommand(command="help", description="Помощь"),
-        ])
-    except Exception:
-        pass
+try:
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Регистрация"),
+        BotCommand(command="profile", description="Профиль"),
+        BotCommand(command="menu", description="Меню клана"),
+        BotCommand(command="help", description="Помощь"),
+    ])
+except Exception:
+    pass
 
     await dp.start_polling(bot)
 
