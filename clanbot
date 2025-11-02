@@ -2173,6 +2173,86 @@ async def cmd_seed(message: Message):
     await message.answer(f"Готово. Отправлено: {sent} | Не доставлено: {failed}.")
 
 
+
+
+# ======= MENU (joined-only) =======
+def clan_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Изменить статус посещения", callback_data="menu:change_attendance")
+    kb.row()
+    kb.button(text="Полезные контакты", callback_data="menu:contacts")
+    kb.button(text="Предстоящие ивенты", callback_data="menu:events")
+    kb.row()
+    kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
+    kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    return kb.adjust(1).as_markup()
+
+def _is_joined_status(user: dict | None) -> bool:
+    try:
+        st = (user or {}).get("status")
+        return bool(st == (Status.JOINED.value if isinstance(Status.JOINED, Enum) else "joined") or st == "joined")
+    except Exception:
+        return False
+
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    user = await get_user(message.from_user.id)
+    if not user or not _is_joined_status(user):
+        await message.answer("Доступно только для игроков, вступивших в клан (статус: joined).")
+        return
+    await message.answer("<b>Меню</b>\nВыберите действие:", reply_markup=clan_menu_kb())
+
+@dp.callback_query(F.data == "menu:contacts")
+async def on_menu_contacts(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True)
+        return
+    # ответ в том же чате
+    try:
+        await call.message.answer("Скоро будет заполнено")
+    except Exception:
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data == "menu:events")
+async def on_menu_events(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True)
+        return
+    try:
+        await call.message.answer("Скоро будет заполнено")
+    except Exception:
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data == "menu:change_attendance")
+async def on_menu_change_attendance(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True)
+        return
+    # Покажем клавиатуру опроса на сегодняшнюю дату по Москве — запись перезапишется, если уже есть
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    try:
+        msk = ZoneInfo("Europe/Moscow")
+        today = datetime.now(msk).date().isoformat()
+    except Exception:
+        today = datetime.utcnow().date().isoformat()
+    kb = training_kb(today)
+    text = f"Изменить ваш ответ на тренировку сегодня?\nДата: <b>{today}</b>"
+    try:
+        await call.message.answer(text, reply_markup=kb)
+    except Exception:
+        pass
+
 async def main():
     await init_db()
     await ensure_training_tables()
@@ -2191,6 +2271,16 @@ async def main():
         scheduler.start()
     except Exception:
         pass
+
+try:
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Регистрация"),
+        BotCommand(command="profile", description="Профиль"),
+        BotCommand(command="menu", description="Меню клана"),
+        BotCommand(command="help", description="Помощь"),
+    ])
+except Exception:
+    pass
 
     await dp.start_polling(bot)
 
