@@ -134,12 +134,12 @@ CREATE TABLE IF NOT EXISTS bot_settings (
 
 async def set_setting(key: str, value: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(\"INSERT INTO bot_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value\", (key, value))
+        await db.execute("INSERT INTO bot_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         await db.commit()
 
 async def get_setting(key: str, default: str | None = None) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(\"SELECT value FROM bot_settings WHERE key=?\", (key,)) as cur:
+        async with db.execute("SELECT value FROM bot_settings WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
             return row[0] if row else default
 async def init_db():
@@ -1953,7 +1953,7 @@ async def check_recruit_promotion_candidates():
         rows = await cur.fetchall()
     for uid, nickname, tg_link, joined_at in rows:
         user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link, "joined_at": joined_at }
-        text = f"Игрок \"{display_name(user)}\" в клане 14 дней и может быть переведен в основной состав."
+        text = f"Игрок "{display_name(user)}" в клане 14 дней и может быть переведен в основной состав."
         try:
             await notify_staff(text)
         except Exception:
@@ -1982,7 +1982,7 @@ async def check_birthdays_today():
             continue
         if bmm == mm and bdd == dd:
             user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link }
-            text = f"Игрок \"{display_name(user)}\" сегодня отмечает день рождения!"
+            text = f"Игрок "{display_name(user)}" сегодня отмечает день рождения!"
             try:
                 await notify_staff(text)
             except Exception:
