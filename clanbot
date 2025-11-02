@@ -1799,7 +1799,7 @@ async def cmd_train_stats(message: Message):
             
         # Send paginated lists (Нет/Опоздаю) for this date
         try:
-                    page_no = 1
+        page_no = 1
             page_late = 1
             rows_no, has_prev_no, has_next_no, total_no = await _ts_fetch_train_page("no", date_str, page_no)
             rows_late, has_prev_late, has_next_late, total_late = await _ts_fetch_train_page("late", date_str, page_late)
