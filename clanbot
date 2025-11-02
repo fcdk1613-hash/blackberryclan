@@ -1897,7 +1897,18 @@ async def cmd_train_stats(message: Message):
             text_lines.append(f"{label}: {disp}: {reason}")
 
 
-        await message.answer("\n".join(text_lines))
+        try:
+            await message.answer("\n".join(text_lines))
+        except TelegramBadRequest:
+            full_text = "\n".join(text_lines)
+            chunk = []
+            for line in full_text.split("\n"):
+                if sum(len(x)+1 for x in chunk) + len(line) + 1 > 4000:
+                    await message.answer("\n".join(chunk))
+                    chunk = []
+                chunk.append(line)
+            if chunk:
+                await message.answer("\n".join(chunk))
 
 
         # Paginated lists (Нет/Опоздаю) for this date
