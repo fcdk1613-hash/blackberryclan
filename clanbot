@@ -1699,7 +1699,7 @@ async def fetch_training_stats(date_from: str, date_to: str | None = None):
 
 
 # ======= /train_stats helpers (pagination lists) =======
-PAGE_SIZE_TRAIN = 20
+PAGE_SIZE_TRAIN = 10
 
 async def _ts_latest_training_date() -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
