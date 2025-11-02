@@ -1795,8 +1795,7 @@ async def cmd_train_stats(message: Message):
             for uid, nick, link in not_answered:
                 uname = username_from_tglink(link)
                 writer.writerow([nick or "-", uname or "-"])
-        try:
-            
+        try:            
         # Send paginated lists (Нет/Опоздаю) for this date
         try:
         page_no = 1
