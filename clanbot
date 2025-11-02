@@ -2331,15 +2331,15 @@ async def main():
     except Exception:
         pass
 
-try:
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Регистрация"),
-        BotCommand(command="profile", description="Профиль"),
-        BotCommand(command="menu", description="Меню клана"),
-        BotCommand(command="help", description="Помощь"),
-    ])
-except Exception:
-    pass
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Регистрация"),
+            BotCommand(command="profile", description="Профиль"),
+            BotCommand(command="menu", description="Меню клана"),
+            BotCommand(command="help", description="Помощь"),
+        ])
+    except Exception:
+        pass
 
     await dp.start_polling(bot)
 
