@@ -1953,7 +1953,7 @@ async def check_recruit_promotion_candidates():
         rows = await cur.fetchall()
     for uid, nickname, tg_link, joined_at in rows:
         user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link, "joined_at": joined_at }
-        text = f"Игрок {display_name(user)} в клане 14 дней и может быть переведен в основной состав."
+        text = f"Игрок {display_name(user)} в клане 14 дней и может быть переведен в основной состав."ей и может быть переведен в основной состав."
         try:
             await notify_staff(text)
         except Exception:
@@ -1982,7 +1982,7 @@ async def check_birthdays_today():
             continue
         if bmm == mm and bdd == dd:
             user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link }
-            text = f"Игрок "{display_name(user)}" сегодня отмечает день рождения!"
+            text = f"Игрок {display_name(user)} сегодня отмечает день рождения!"
             try:
                 await notify_staff(text)
             except Exception:
