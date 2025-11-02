@@ -1710,6 +1710,36 @@ async def cmd_train_stats(message: Message):
     if len(tail) > 1:
         dates = [t for t in tail[1].strip().split() if t]
 
+    # === Single-date view with paginated player lists (Нет/Опоздаю) ===
+    # If 0 or 1 date provided -> show lists for that specific date (or latest)
+    try_date = dates[0] if len(dates) == 1 else None
+    if len(dates) <= 1:
+        # Pick date
+        if try_date is None:
+            date_str = await _ts_latest_training_date()
+            if not date_str:
+                await message.answer("Нет данных по тренировкам.")
+                return
+        else:
+            # Validate YYYY-MM-DD
+            try:
+                _ = datetime.strptime(try_date, "%Y-%m-%d")
+            except ValueError:
+                await message.answer("Некорректная дата. Используйте формат YYYY-MM-DD.")
+                return
+            date_str = try_date
+
+        page_no = 1
+        page_late = 1
+        rows_no, has_prev_no, has_next_no, total_no = await _ts_fetch_train_page("no", date_str, page_no)
+        rows_late, has_prev_late, has_next_late, total_late = await _ts_fetch_train_page("late", date_str, page_late)
+
+        text = _ts_format_train_lists(date_str, page_no, total_no, rows_no, page_late, total_late, rows_late)
+        await message.answer(text, reply_markup=_ts_nav_kb(date_str, page_no, has_prev_no, has_next_no,
+                                                           page_late, has_prev_late, has_next_late))
+        return
+    # === Otherwise fall back to existing range mode (two dates) ===
+
     from zoneinfo import ZoneInfo
     msk = ZoneInfo("Europe/Moscow")
     today = datetime.now(msk).date().isoformat()
@@ -2213,3 +2243,115 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
+
+
+# ======= /train_stats: paginated lists for "Нет" and "Опоздаю" (single date) =======
+PAGE_SIZE_TRAIN = 20
+
+async def _ts_latest_training_date() -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT date FROM training_attendance ORDER BY date DESC LIMIT 1")
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+def _ts_username(nickname: str | None, tg_link: str | None) -> str:
+    try:
+        tag = username_from_tglink(tg_link) if 'username_from_tglink' in globals() else None
+    except Exception:
+        tag = None
+    name = (nickname or "—").strip()
+    if tag:
+        return f"{name} (@{tag})" if not name.startswith('@') else name
+    return name
+
+async def _ts_fetch_train_page(resp: str, date_str: str, page: int):
+    offset = (page - 1) * PAGE_SIZE_TRAIN
+    async with aiosqlite.connect(DB_PATH) as db:
+        cnt_cur = await db.execute(
+            """
+            SELECT COUNT(1)
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ? AND t.response = ? AND u.status = 'joined'
+            """,
+            (date_str, resp),
+        )
+        total = (await cnt_cur.fetchone())[0]
+
+        cur = await db.execute(
+            """
+            SELECT t.user_id, u.nickname, u.tg_link
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ? AND t.response = ? AND u.status = 'joined'
+            ORDER BY COALESCE(u.nickname, '') COLLATE NOCASE ASC, t.user_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (date_str, resp, PAGE_SIZE_TRAIN, offset),
+        )
+        rows = await cur.fetchall()
+
+    has_prev = page > 1
+    has_next = (offset + PAGE_SIZE_TRAIN) < total
+    return rows, has_prev, has_next, total
+
+def _ts_format_train_lists(date_str: str, page_no: int, total_no: int, rows_no,
+                           page_late: int, total_late: int, rows_late):
+    lines = [f"<b>Статистика тренировки</b>\nДата: <b>{date_str}</b>"]
+    # Нет
+    lines.append(f"\n<b>Нет</b> — страница {page_no} • всего: {total_no}")
+    if not rows_no:
+        lines.append("— пусто —")
+    else:
+        for idx, (uid, nick, tg_link) in enumerate(rows_no, 1):
+            lines.append(f"{idx:>2}. {_ts_username(nick, tg_link)} — ID: <code>{uid}</code>")
+    # Опоздаю
+    lines.append(f"\n<b>Опоздаю</b> — страница {page_late} • всего: {total_late}")
+    if not rows_late:
+        lines.append("— пусто —")
+    else:
+        for idx, (uid, nick, tg_link) in enumerate(rows_late, 1):
+            lines.append(f"{idx:>2}. {_ts_username(nick, tg_link)} — ID: <code>{uid}</code>")
+    return "\\n".join(lines)
+
+def _ts_nav_kb(date_str: str, page_no: int, has_prev_no: bool, has_next_no: bool,
+               page_late: int, has_prev_late: bool, has_next_late: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if has_prev_no:
+        kb.button(text="◀️ Назад (Нет)", callback_data=f"tstats:no:{date_str}:{page_no-1}:{page_late}")
+    if has_next_no:
+        kb.button(text="Далее (Нет) ▶️", callback_data=f"tstats:no:{date_str}:{page_no+1}:{page_late}")
+    kb.row()
+    if has_prev_late:
+        kb.button(text="◀️ Назад (Опоздаю)", callback_data=f"tstats:late:{date_str}:{page_no}:{page_late-1}")
+    if has_next_late:
+        kb.button(text="Далее (Опоздаю) ▶️", callback_data=f"tstats:late:{date_str}:{page_no}:{page_late+1}")
+    return kb.adjust(1).as_markup()
+
+@dp.callback_query(F.data.startswith("tstats:"))
+async def on_tstats_nav(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Только модераторы/администраторы.", show_alert=True)
+        return
+    try:
+        _, which, date_str, p_no_str, p_late_str = call.data.split(":")
+        page_no = int(p_no_str)
+        page_late = int(p_late_str)
+        if which == "no":
+            page_no = max(1, page_no)
+        else:
+            page_late = max(1, page_late)
+    except Exception:
+        await call.answer("Некорректные параметры.", show_alert=True)
+        return
+
+    rows_no, has_prev_no, has_next_no, total_no = await _ts_fetch_train_page("no", date_str, page_no)
+    rows_late, has_prev_late, has_next_late, total_late = await _ts_fetch_train_page("late", date_str, page_late)
+
+    text = _ts_format_train_lists(date_str, page_no, total_no, rows_no, page_late, total_late, rows_late)
+    try:
+        await call.message.edit_text(text, reply_markup=_ts_nav_kb(date_str, page_no, has_prev_no, has_next_no,
+                                                                   page_late, has_prev_late, has_next_late))
+    except TelegramBadRequest:
+        pass
+    await call.answer()
