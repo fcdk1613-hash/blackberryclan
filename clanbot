@@ -1953,7 +1953,7 @@ async def check_recruit_promotion_candidates():
         rows = await cur.fetchall()
     for uid, nickname, tg_link, joined_at in rows:
         user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link, "joined_at": joined_at }
-        text = f"Игрок {display_name(user)} в клане 14 дней и может быть переведен в основной состав"
+        text = f"Игрок {display_name(user)} в клане 14 дней и может быть переведен в основной состав."ей и может быть переведен в основной состав."
         try:
             await notify_staff(text)
         except Exception:
@@ -2249,8 +2249,10 @@ async def cmd_set_contacts_text(message: Message):
         return
     await set_setting("contacts_text", arg[1].strip())
     await message.answer("Текст для «Полезные контакты» обновлён.")
-@dp.message(Command("menu"))
+@dp.message(Command("menu"), F.chat.type == "private")
 async def cmd_menu(message: Message):
+    if message.chat.type != "private":
+        return
     user = await get_user(message.from_user.id)
     if not user or not _is_joined_status(user):
         await message.answer("Доступно только для игроков, вступивших в клан (статус: joined).")
@@ -2329,15 +2331,15 @@ async def main():
     except Exception:
         pass
 
-    try:
-        await bot.set_my_commands([
-            BotCommand(command="start", description="Регистрация"),
-            BotCommand(command="profile", description="Профиль"),
-            BotCommand(command="menu", description="Меню клана"),
-            BotCommand(command="help", description="Помощь"),
-        ])
-    except Exception:
-        pass
+try:
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Регистрация"),
+        BotCommand(command="profile", description="Профиль"),
+        BotCommand(command="menu", description="Меню клана"),
+        BotCommand(command="help", description="Помощь"),
+    ])
+except Exception:
+    pass
 
     await dp.start_polling(bot)
 
