@@ -1784,12 +1784,21 @@ async def cmd_train_stats(message: Message):
             text_lines.append(f"{label}: {disp}: {reason}")
 
 
-        await message.answer("\n".join(text_lines))
-
+        # Разбиваем длинное сообщение на части, чтобы избежать "Bad Request: message is too long"
+        _full_text = "\n".join(text_lines)
+        _max = 3900  # запас от лимита Telegram ~4096
+        _buf = []
+        _len = 0
+        for _line in _full_text.splitlines():
+            if _len + len(_line) + 1 > _max:
+                await message.answer("\n".join(_buf) if _buf else ".")
+                _buf = [_line]
+                _len = len(_line) + 1
+            else:
+                _buf.append(_line)
+                _len += len(_line) + 1
         if _buf:
-            await message.answer("
-".join(_buf))
-
+            await message.answer("\n".join(_buf))
         # Build and send CSV with not answered
         import csv
         csv_name = f"not_answered_{date_str}.csv"
