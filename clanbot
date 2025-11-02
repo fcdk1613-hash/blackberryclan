@@ -1796,6 +1796,9 @@ async def cmd_train_stats(message: Message):
                 uname = username_from_tglink(link)
                 writer.writerow([nick or "-", uname or "-"])
         try:
+
+
+
             
         # Send paginated lists (Нет/Опоздаю) for this date
         try:
