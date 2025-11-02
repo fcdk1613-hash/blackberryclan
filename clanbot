@@ -125,12 +125,12 @@ def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
 
 
 # Settings storage (for admin-editable texts)
-CREATE_SETTINGS_SQL = \"\"\"
+CREATE_SETTINGS_SQL = """
 CREATE TABLE IF NOT EXISTS bot_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 )
-\"\"\"
+"""
 
 async def set_setting(key: str, value: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
