@@ -1796,6 +1796,10 @@ async def cmd_train_stats(message: Message):
                 uname = username_from_tglink(link)
                 writer.writerow([nick or "-", uname or "-"])
         try:
+            
+        # Send paginated lists (Нет/Опоздаю) for this date
+        try:
+                pass
         page_no = 1
             page_late = 1
             rows_no, has_prev_no, has_next_no, total_no = await _ts_fetch_train_page("no", date_str, page_no)
