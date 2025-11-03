@@ -1,3 +1,4 @@
+import aiohttp
 
 # main.py
 # aiogram 3.x bot for Blackberry clan onboarding
@@ -44,6 +45,10 @@ MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 7566533396}     
 
 DB_PATH = "blackberry_bot.db"
 
+
+# External server identifiers for status checks
+FRUIT_SERVER_CODE = "snprwyx"
+FRUIT_SERVER_ADDR = None  # e.g. "95.216.95.95:7787"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in code (fill BOT_TOKEN at the top of main.py)")
 
@@ -2205,6 +2210,8 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    kb.row()
+    kb.button(text="📊 Статус [RU] Фруктовый сад", callback_data="menu:fruit_status")
     return kb.adjust(1).as_markup()
 
 def _is_joined_status(user: dict | None) -> bool:
