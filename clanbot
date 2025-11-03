@@ -2447,7 +2447,7 @@ class FindPlayerState(StatesGroup):
 def admin_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="/players"), KeyboardButton(text="/train_stats")],
+            [KeyboardButton(text="Список игроков"), KeyboardButton(text="/train_stats")],
             [KeyboardButton(text="/stats"), KeyboardButton(text="/contacts")],
             [KeyboardButton(text="/ivent"), KeyboardButton(text="Найти игрока")],
             [KeyboardButton(text="Закрыть меню")],
