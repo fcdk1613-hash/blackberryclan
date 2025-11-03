@@ -378,7 +378,7 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
         ("Заявка", user.get("applied_at")),
         ("Одобрен", user.get("approved_at")),
         ("Резерв до", user.get("reserve_until")),
-        ]
+        \]
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
@@ -2437,6 +2437,84 @@ async def main():
         pass
 
     await dp.start_polling(bot)
+
+
+
+# ======= Admin Menu (/amenu) & Find Player flow =======
+class FindPlayerState(StatesGroup):
+    waiting_query = State()
+
+def admin_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="/players"), KeyboardButton(text="/train_stats")],
+            [KeyboardButton(text="/stats"), KeyboardButton(text="/contacts")],
+            [KeyboardButton(text="/ivent"), KeyboardButton(text="Найти игрока")],
+            [KeyboardButton(text="Закрыть меню")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите действие"
+    )
+
+@dp.message(Command("amenu"))
+async def cmd_admin_menu(message: Message):
+    # доступ только для админов/модераторов — сами команды всё равно ещё раз проверят права
+    uid = message.from_user.id
+    if uid not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    await message.answer("Админ-меню:", reply_markup=admin_menu_kb())
+
+@dp.message(F.text == "Закрыть меню")
+async def close_admin_menu(message: Message):
+    await message.answer("Меню скрыто.", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(F.text == "Найти игрока")
+async def find_player_start(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    if uid not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    await message.answer("Введите ID, @username или часть ника игрока:")
+    await state.set_state(FindPlayerState.waiting_query)
+
+@dp.message(FindPlayerState.waiting_query)
+async def find_player_query(message: Message, state: FSMContext):
+    # Логика поиска повторяет /player
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        await state.clear()
+        return
+    query = (message.text or "").strip()
+    if not query:
+        await message.answer("Пустой запрос. Введите ID, @username или часть ника.")
+        return
+
+    # Попытка найти пользователя — как в /player
+    target_user: Optional[dict] = None
+    if query.isdigit():
+        target_user = await get_user(int(query))
+    if not target_user and query.startswith("@"):
+        target_user = await get_user_by_username(query)
+    if not target_user:
+        matches = await search_users_by_nickname(query, limit=10)
+        if len(matches) == 1:
+            target_user = matches[0]
+        elif len(matches) > 1:
+            lines = ["Найдено несколько пользователей:"]
+            for u in matches:
+                lines.append(f"• {u.get('nickname') or '-'} — ClanID: {pad_clan_id(u.get('clan_id'))} — ID: <code>{u['user_id']}</code> — фракция: {u.get('faction') or '-'}")
+            lines.append("\nУточните: введите точный ID или @username.")
+            await message.answer("\\n".join(lines))
+            return
+
+    if not target_user:
+        await message.answer("Пользователь не найден.")
+        return
+
+    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"]))
+    await state.clear()
 
 if __name__ == "__main__":
     try:
