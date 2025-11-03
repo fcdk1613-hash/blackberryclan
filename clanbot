@@ -18,6 +18,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
     ChatMemberUpdated,
     Message,
     KeyboardButton,
@@ -2431,10 +2433,27 @@ async def main():
             BotCommand(command="start", description="Регистрация"),
             BotCommand(command="profile", description="Профиль"),
             BotCommand(command="menu", description="Меню клана"),
-            BotCommand(command="help", description="Помощь"),
-        ])
+])
     except Exception:
         pass
+
+    try:
+        # Команды для админов/модераторов (добавляем /amenu)
+        admin_cmds = [
+            BotCommand(command="start", description="Регистрация"),
+            BotCommand(command="profile", description="Профиль"),
+            BotCommand(command="menu", description="Меню клана"),
+            BotCommand(command="amenu", description="Админ-меню"),
+]
+        # Устанавливаем команды в приватных чатах для каждого администратора/модератора
+        for _uid in (set(ADMIN_IDS) | set(MODERATOR_IDS)):
+            try:
+                await bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=_uid))
+            except Exception:
+                continue
+    except Exception:
+        pass
+
 
     await dp.start_polling(bot)
 
