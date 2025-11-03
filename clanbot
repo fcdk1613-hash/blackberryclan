@@ -1,6 +1,3 @@
-import socket
-import struct
-import aiohttp
 
 # main.py
 # aiogram 3.x bot for Blackberry clan onboarding
@@ -47,10 +44,6 @@ MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 7566533396}     
 
 DB_PATH = "blackberry_bot.db"
 
-
-# External server identifiers for status checks
-FRUIT_SERVER_CODE = "snprwyx"
-FRUIT_SERVER_ADDR = "46.174.55.146:7810"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in code (fill BOT_TOKEN at the top of main.py)")
 
@@ -2212,8 +2205,6 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
-    kb.row()
-    kb.button(text="📊 Статус [RU] Фруктовый сад", callback_data="menu:fruit_status")
     return kb.adjust(1).as_markup()
 
 def _is_joined_status(user: dict | None) -> bool:
@@ -2321,97 +2312,6 @@ async def on_menu_change_attendance(call: CallbackQuery):
     except Exception:
         pass
 
-
-# ======= A2S (Steam query) helpers for Squad server status =======
-def _read_cstring(buf: bytes, idx: int):
-    end = buf.find(b"\x00", idx)
-    if end == -1:
-        return "", idx
-    return buf[idx:end].decode(errors="ignore"), end + 1
-
-def a2s_info(ip: str, port: int, timeout: float = 2.5):
-    # Return dict with minimal fields from A2S_INFO (players, max, map)
-    addr = (ip, port)
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.settimeout(timeout)
-        payload = b"\xFF\xFF\xFF\xFFTSource Engine Query\x00"
-        s.sendto(payload, addr)
-        data, _ = s.recvfrom(4096)
-    if not data or data[0] != 0xFF or data[4] != 0x49:  # 0x49 = 'I'
-        return None
-    idx = 5
-    protocol = data[idx]; idx += 1
-    name, idx = _read_cstring(data, idx)
-    current_map, idx = _read_cstring(data, idx)
-    folder, idx = _read_cstring(data, idx)
-    game, idx = _read_cstring(data, idx)
-    if idx + 2 > len(data):
-        return {"map": current_map or "-", "players": None, "max": None}
-    app_id = struct.unpack_from("<H", data, idx)[0]; idx += 2
-    if idx + 3 > len(data):
-        return {"map": current_map or "-", "players": None, "max": None}
-    players = data[idx]; idx += 1
-    max_players = data[idx]; idx += 1
-    bots = data[idx]; idx += 1
-    return {"map": current_map or "-", "players": int(players), "max": int(max_players)}
-
-def a2s_rules(ip: str, port: int, timeout: float = 2.5):
-    # Return dict of server rules (key->value) or {}
-    addr = (ip, port)
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.settimeout(timeout)
-        s.sendto(b"\xFF\xFF\xFF\xFF\x56\xFF\xFF\xFF\xFF", addr)
-        data, _ = s.recvfrom(4096)
-        if not data or data[0] != 0xFF or data[4] != 0x41:
-            return {}
-        challenge = data[5:9]
-        s.sendto(b"\xFF\xFF\xFF\xFF\x56" + challenge, addr)
-        data, _ = s.recvfrom(65535)
-    if not data or data[0] != 0xFF or data[4] != 0x45:
-        return {}
-    idx = 5
-    if idx + 2 > len(data):
-        return {}
-    num_rules = struct.unpack_from("<H", data, idx)[0]; idx += 2
-    rules = {}
-    for _ in range(num_rules):
-        k, idx = _read_cstring(data, idx)
-        v, idx = _read_cstring(data, idx)
-        if not k:
-            break
-        rules[k] = v
-    return rules
-
-def query_squad_status(addr: str, timeout: float = 2.5):
-    # Returns tuple (players_text, map_name, elapsed_text)
-    try:
-        host, port_str = addr.split(":"); port = int(port_str)
-    except Exception:
-        return None
-    try:
-        info = a2s_info(host, port, timeout=timeout)
-    except Exception:
-        info = None
-    try:
-        rules = a2s_rules(host, port, timeout=timeout)
-    except Exception:
-        rules = {}
-    players = info.get("players") if info else None
-    map_name = info.get("map") if info else None
-    elapsed = None
-    for k in ["time_elapsed","TimeElapsed","ROUND_TIME","ROUND_ELAPSED","MATCHTIME","match_time","TimeElapsed_s","ElapsedTime","TIME"]:
-        if k in rules and rules[k]:
-            v = rules[k]
-            try:
-                sec = int(v); m = sec//60; s = sec%60; elapsed = f"{m:02d}:{s:02d}"
-            except Exception:
-                elapsed = str(v)
-            break
-    if elapsed is None:
-        for k in ["timeleft","TimeLeft","TIMELEFT"]:
-            if k in rules and rules[k]:
-                elapsed = f"−{rules[k]}"; break
-    return (str(players) if players is not None else "—", (map_name or "—"), (elapsed or "—"))
 async def main():
     await init_db()
     await ensure_training_tables()
