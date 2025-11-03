@@ -378,7 +378,7 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
         ("Заявка", user.get("applied_at")),
         ("Одобрен", user.get("approved_at")),
         ("Резерв до", user.get("reserve_until")),
-        \]
+        ]
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
