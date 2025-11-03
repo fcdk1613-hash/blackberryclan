@@ -378,7 +378,7 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
         ("Заявка", user.get("applied_at")),
         ("Одобрен", user.get("approved_at")),
         ("Резерв до", user.get("reserve_until")),
-        ]
+        \]
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
@@ -2447,9 +2447,9 @@ class FindPlayerState(StatesGroup):
 def admin_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Список игроков"), KeyboardButton(text="/train_stats")],
-            [KeyboardButton(text="/stats"), KeyboardButton(text="/contacts")],
-            [KeyboardButton(text="/ivent"), KeyboardButton(text="Найти игрока")],
+            [KeyboardButton(text="Список игроков"), KeyboardButton(text="Статус посещения")],
+            [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Изменить контакты")],
+            [KeyboardButton(text="Изменить ивенты"), KeyboardButton(text="Найти игрока")],
             [KeyboardButton(text="Закрыть меню")],
         ],
         resize_keyboard=True,
@@ -2459,7 +2459,6 @@ def admin_menu_kb() -> ReplyKeyboardMarkup:
 
 @dp.message(Command("amenu"))
 async def cmd_admin_menu(message: Message):
-    # доступ только для админов/модераторов — сами команды всё равно ещё раз проверят права
     uid = message.from_user.id
     if uid not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
@@ -2469,6 +2468,71 @@ async def cmd_admin_menu(message: Message):
 @dp.message(F.text == "Закрыть меню")
 async def close_admin_menu(message: Message):
     await message.answer("Меню скрыто.", reply_markup=ReplyKeyboardRemove())
+
+# --- Label -> command dispatchers ---
+def _as_command(message: Message, text: str) -> Message:
+    try:
+        # aiogram v3 models support model_copy
+        return message.model_copy(update={"text": text})
+    except Exception:
+        # fallback: return original (handlers below also guard)
+        return message
+
+@dp.message(F.text == "Список игроков")
+async def on_label_players(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/players")
+    try:
+        await cmd_players(fake)
+    except Exception:
+        # если сигнатура изменилась, просто отправим команду в чат для ручного вызова
+        await message.answer("/players")
+
+@dp.message(F.text == "Статус посещения")
+async def on_label_train_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/train_stats")
+    try:
+        await cmd_train_stats(fake)  # /train_stats [period]
+    except Exception:
+        await message.answer("/train_stats")
+
+@dp.message(F.text == "Статистика клана")
+async def on_label_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/stats")
+    try:
+        await cmd_stats(fake)
+    except Exception:
+        await message.answer("/stats")
+
+@dp.message(F.text == "Изменить контакты")
+async def on_label_contacts(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/contacts")
+    try:
+        await cmd_set_contacts_text(fake)
+    except Exception:
+        await message.answer("/contacts")
+
+@dp.message(F.text == "Изменить ивенты")
+async def on_label_ivent(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/ivent")
+    try:
+        await cmd_set_events_text(fake)
+    except Exception:
+        await message.answer("/ivent")
 
 @dp.message(F.text == "Найти игрока")
 async def find_player_start(message: Message, state: FSMContext):
@@ -2491,7 +2555,6 @@ async def find_player_query(message: Message, state: FSMContext):
         await message.answer("Пустой запрос. Введите ID, @username или часть ника.")
         return
 
-    # Попытка найти пользователя — как в /player
     target_user: Optional[dict] = None
     if query.isdigit():
         target_user = await get_user(int(query))
@@ -2499,12 +2562,14 @@ async def find_player_query(message: Message, state: FSMContext):
         target_user = await get_user_by_username(query)
     if not target_user:
         matches = await search_users_by_nickname(query, limit=10)
-        if len(matches) == 1:
+        if isinstance(matches, list) and len(matches) == 1:
             target_user = matches[0]
-        elif len(matches) > 1:
+        elif isinstance(matches, list) and len(matches) > 1:
             lines = ["Найдено несколько пользователей:"]
             for u in matches:
-                lines.append(f"• {u.get('nickname') or '-'} — ClanID: {pad_clan_id(u.get('clan_id'))} — ID: <code>{u['user_id']}</code> — фракция: {u.get('faction') or '-'}")
+                lines.append(
+                    f"• {u.get('nickname') or '-'} — ClanID: {pad_clan_id(u.get('clan_id'))} — ID: <code>{u['user_id']}</code> — фракция: {u.get('faction') or '-'}"
+                )
             lines.append("\nУточните: введите точный ID или @username.")
             await message.answer("\\n".join(lines))
             return
