@@ -2511,7 +2511,7 @@ async def on_label_players(message: Message):
 
 @dp.message(F.text == "Статус посещения")
 async def on_label_train_stats(message: Message):
-    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+    if message.from_user.id not in (ADMIN_IDS):
         await message.answer("Только модераторы/администраторы.")
         return
     fake = _as_command(message, "/train_stats")
