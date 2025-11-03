@@ -151,6 +151,7 @@ async def init_db():
         # Migrations
         for alter in [
             "ALTER TABLE users ADD COLUMN applied_at TEXT",
+            "ALTER TABLE users ADD COLUMN reserve_until TEXT",
             "ALTER TABLE users ADD COLUMN birth_date TEXT",
             "ALTER TABLE users ADD COLUMN faction TEXT",
             "ALTER TABLE users ADD COLUMN clan_id INTEGER",
@@ -264,6 +265,9 @@ class RegStates(StatesGroup):
 class AdminEdit(StatesGroup):
     waiting_value = State()
 
+
+class ReserveUntilState(StatesGroup):
+    waiting_date = State()
 class TrainingReason(StatesGroup):
     waiting_reason = State()
 
@@ -373,8 +377,8 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
         ("Создан", user.get("created_at")),
         ("Заявка", user.get("applied_at")),
         ("Одобрен", user.get("approved_at")),
-        ("Вступил", user.get("joined_at")),
-    ]
+        ("Резерв до", user.get("reserve_until")),
+        \]
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
@@ -784,29 +788,38 @@ async def on_profile_back(call: CallbackQuery):
     await call.answer()
 
 @dp.callback_query(F.data.startswith("facset:"))
-async def on_profile_set_faction(call: CallbackQuery):
+async def on_profile_set_faction(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Недостаточно прав.", show_alert=True)
         return
     try:
         _, uid_str, code = call.data.split(":")
         target_id = int(uid_str)
-        title = {"hq":"Штаб","blackhole":"Black Hole","armless":"Armless","brainless":"Brainless","burning":"Burning Assholes","freshmeat":"Fresh Meat","useless":"Useless cans","reserve":"Резерв"}.get(code)
+        title = {"hq":"Штаб","blackhole":"Black Hole","armless":"Armless","brainless":"Brainless",
+                 "burning":"Burning Assholes","freshmeat":"Fresh Meat","useless":"Useless cans","reserve":"Резерв"}.get(code)
         if not title:
             raise ValueError("unknown faction code")
     except Exception:
         await call.answer("Некорректные данные.", show_alert=True)
         return
-    await upsert_user(target_id, faction=title)
-    # Уведомление игрока о смене фракции
-    await send_faction_notice(target_id, title)
-
-    user = await get_user(target_id)
-    try:
-        await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id))
-    except Exception:
-        pass
-    await call.answer(f"Фракция установлена: {title}")
+    # Если не резерв — как раньше
+    if code != "reserve":
+        await upsert_user(target_id, faction=title)
+        await send_faction_notice(target_id, title)
+        user = await get_user(target_id)
+        try:
+            await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id))
+        except Exception:
+            pass
+        await call.answer(f"Фракция установлена: {title}")
+        return
+    # Для резерва — спрашиваем дату
+    await state.update_data(reserve_user_id=target_id,
+                            panel_chat_id=call.message.chat.id,
+                            panel_msg_id=call.message.message_id)
+    await call.message.answer("Введите дату, до которой игрок будет в резерве, в формате ДД.ММ.ГГГГ (например, 25.12.2025):")
+    await state.set_state(ReserveUntilState.waiting_date)
+    await call.answer()
 
 
 @dp.callback_query(F.data.startswith("edit:init:"))
@@ -1993,22 +2006,40 @@ async def check_birthdays_today():
                         pass
 
 async def send_faction_notice(user_id: int, faction: str):
-    texts = {
-        "Штаб": "Поздравляем! Ты избрано Богом, судьбой и Кичем. Твоя фракция: Штаб. Помни, ты ответственен за людей.",
-        "Black Hole": "Поздравляем! Твоя фракция изменена на Black Hole! Ты - элита клана. Твой командир: Chidori(@Bigchungusik)",
-        "Armless": "Поздравляем! Твоя фракция изменена на Armless. Твой командир: Lazy(@lazyprogramer)",
-        "Brainless": "Поздравляем! Твоя фракция изменена на Brainless. Твой командир: Zerox(@Sadz3ro)",
-        "Burning Assholes": "Поздравляем! Твоя фракция изменена на Burning Assholes. Твой командир: Fluffy_Racc00n(@Fluffy_Racc00n)",
-        "Useless cans": "Поздравляем! Твоя фракция изменена на Useless Cans. Твой командир: Gadler(@Gadler0)",
-        "Резерв": "Ты переведен в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
-    }
-    text = texts.get(faction)
-    if not text:
+    if faction != "Резерв":
+        texts = {
+            "Штаб": "Поздравляем! Ты избрано Богом, судьбой и Кичем. Твоя фракция: Штаб. Помни, ты ответственен за людей.",
+            "Black Hole": "Поздравляем! Твоя фракция изменена на Black Hole! Ты - элита клана. Твой командир: Chidori(@Bigchungusik)",
+            "Armless": "Поздравляем! Твоя фракция изменена на Armless. Твой командир: Lazy(@lazyprogramer)",
+            "Brainless": "Поздравляем! Твоя фракция изменена на Brainless. Твой командир: Zerox(@Sadz3ro)",
+            "Burning Assholes": "Поздравляем! Твоя фракция изменена на Burning Assholes. Твой командир: Fluffy_Racc00n(@Fluffy_Racc00n)",
+            "Useless cans": "Поздравляем! Твоя фракция изменена на Useless Cans. Твой командир: Gadler(@Gadler0)",
+        }
+        text = texts.get(faction)
+        if not text:
+            return
+        try:
+            await bot.send_message(user_id, text)
+        except Exception:
+            pass
         return
+    # Для Резерва — пробуем включить дату
+    user = await get_user(user_id)
+    until_iso = (user or {}).get("reserve_until")
+    msg = None
+    if until_iso:
+        try:
+            d = datetime.strptime(until_iso, "%Y-%m-%d").date()
+            msg = f"Ты переведён в резерв клана до {d.strftime('%d.%m.%Y')}. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
+        except Exception:
+            pass
+    if not msg:
+        msg = "Ты переведён в резерв клана. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR."
     try:
-        await bot.send_message(user_id, text)
+        await bot.send_message(user_id, msg)
     except Exception:
         pass
+
 
 
 # ==== Manual moderation commands (/accept, /reject) ====
@@ -2312,6 +2343,69 @@ async def on_menu_change_attendance(call: CallbackQuery):
     except Exception:
         pass
 
+@dp.message(ReserveUntilState.waiting_date)
+async def on_reserve_until_input(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    try:
+        dt = datetime.strptime(raw, "%d.%m.%Y").date()
+    except Exception:
+        await message.answer("❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ (например, 25.12.2025).")
+        return
+    data = await state.get_data()
+    target_id = data.get("reserve_user_id")
+    if not target_id:
+        await message.answer("Не удалось определить игрока. Попробуйте ещё раз.")
+        await state.clear()
+        return
+    # Сохраняем фракцию и дату в ISO
+    await upsert_user(target_id, faction="Резерв", reserve_until=dt.isoformat())
+    # Отправляем игроку сообщение с датой
+    try:
+        await bot.send_message(target_id, f"Ты переведён в резерв клана до {raw}. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR.")
+    except Exception:
+        pass
+    # Обновляем карточку
+    user = await get_user(target_id)
+    panel_chat_id = data.get("panel_chat_id")
+    panel_msg_id = data.get("panel_msg_id")
+    try:
+        if panel_chat_id and panel_msg_id:
+            await bot.edit_message_text(chat_id=panel_chat_id, message_id=panel_msg_id, text=format_profile(user), reply_markup=profile_admin_kb(target_id))
+        else:
+            await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id))
+    except Exception:
+        try:
+            await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id))
+        except Exception:
+            pass
+    await message.answer("✅ Перевод в резерв сохранён.")
+    await state.clear()
+
+async def check_reserve_expired():
+    """Проверяем игроков в резерве с наступившей датой и уведомляем модераторов/админов."""
+    try:
+        tz = ZoneInfo("Europe/Moscow")
+    except Exception:
+        tz = None
+    today = (datetime.now(tz).date() if tz else datetime.utcnow().date()).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, nickname, tg_link FROM users WHERE faction='Резерв' AND reserve_until IS NOT NULL AND date(reserve_until) <= date(?)",
+            (today,)
+        )
+        rows = await cur.fetchall()
+    for uid, nickname, tg_link in rows:
+        user = {"user_id": uid, "nickname": nickname, "tg_link": tg_link}
+        text = f"Игрок \"{display_name(user)}\" должен вернуться из резерва. Свяжитесь с ним."
+        try:
+            await notify_staff(text)
+        except Exception:
+            for rid in reviewer_ids():
+                try:
+                    await bot.send_message(rid, text)
+                except Exception:
+                    pass
+
 async def main():
     await init_db()
     await ensure_training_tables()
@@ -2322,6 +2416,7 @@ async def main():
         scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
         scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
+        scheduler.add_job(check_reserve_expired, CronTrigger(hour=10, minute=15))
         
     # Daily checks: recruits 14d & birthdays (MSK)
 # Daily checks: recruits 14d & birthdays (MSK)
