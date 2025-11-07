@@ -577,6 +577,12 @@ async def got_discord(message: Message, state: FSMContext):
 
 @dp.message(RegStates.waiting_steam)
 async def got_steam(message: Message, state: FSMContext):
+    steam = (message.text or "").strip()
+    if not (steam.isdigit() and len(steam) == 17):
+        await message.answer("❌ Неверный SteamID. Укажите ровно 17 цифр, без пробелов и других символов.")
+        # остаёмся на том же шаге
+        await state.set_state(RegStates.waiting_steam)
+        return
     await state.update_data(steamid=message.text.strip())
     await message.answer("Введите дату рождения (в формате ДД.ММ.ГГГГ):")
     await state.set_state(RegStates.waiting_birthdate)
