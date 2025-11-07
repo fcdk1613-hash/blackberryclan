@@ -572,7 +572,7 @@ async def got_nick(message: Message, state: FSMContext):
 @dp.message(RegStates.waiting_discord)
 async def got_discord(message: Message, state: FSMContext):
     await state.update_data(discord=message.text.strip())
-    await message.answer("Введите SteamID:(Вкладка "Об аккаунте")")
+    await message.answer("Введите SteamID:(Вкладка Об аккаунте)")
     await state.set_state(RegStates.waiting_steam)
 
 @dp.message(RegStates.waiting_steam)
