@@ -1119,8 +1119,7 @@ async def cmd_profile(message: Message):
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
-    await message.answer("
-".join(lines))
+     await message.answer("\n".join(lines))
 @dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
 async def on_user_joined_clan(message: Message):
     for member in message.new_chat_members:
