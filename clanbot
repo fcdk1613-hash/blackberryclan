@@ -1107,14 +1107,20 @@ async def cmd_profile(message: Message):
         await message.answer("Профиль не найден. Нажмите /start")
         return
     lines = ["<b>Ваш профиль</b>"]
-    for key in ("clan_id", "user_id", "nickname", "discord", "steamid", "birth_date", "age", "timezone", "tg_link", "faction", "status", "created_at", "applied_at", "approved_at", "joined_at"):
-        val = user.get(key)
-        if key == "clan_id":
-            val = pad_clan_id(val)
-        if val:
-            lines.append(f"{key}: {val}")
-    await message.answer("\n".join(lines))
-
+    fields = [
+        ("TG ID", user.get("user_id")),
+        ("Ник(реальное имя)", user.get("nickname")),
+        ("Дискорд", user.get("discord")),
+        ("STEAM ID", user.get("steamid")),
+        ("Дата рождения", user.get("birth_date")),
+        ("Часовой пояс", user.get("timezone")),
+        ("Фракция", user.get("faction")),
+    ]
+    for k, v in fields:
+        if v not in (None, "", "None"):
+            lines.append(f"{k}: {v}")
+    await message.answer("
+".join(lines))
 @dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
 async def on_user_joined_clan(message: Message):
     for member in message.new_chat_members:
