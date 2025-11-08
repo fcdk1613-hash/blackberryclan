@@ -2717,7 +2717,7 @@ async def find_player_query(message: Message, state: FSMContext):
         await message.answer("Пользователь не найден.")
         return
 
-    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"] actor_id=message.from_user.id, actor_id=message.from_user.id))
+    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id, actor_id=message.from_user.id))
     await state.clear()
 
 if __name__ == "__main__":
