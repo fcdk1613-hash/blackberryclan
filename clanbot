@@ -1211,8 +1211,7 @@ if history:
     lines.append("<b>История турниров</b>")
     for created_at, entry_text in history:
         lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
-await message.answer("
-".join(lines))
+await message.answer("\n".join(lines))
         return
     lines = ["<b>Ваш профиль</b>"]
     fields = [
