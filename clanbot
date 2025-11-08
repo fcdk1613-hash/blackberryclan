@@ -483,14 +483,14 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
         lines.append("\n<b>История турниров</b>")
         for created_at, entry_text in hist:
             lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
-# Отрисовка истории турниров
-if history:
-    lines.append("<b>История турниров</b>")
-    for created_at, entry_text in history:
-        lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
-
+    # Отрисовка истории турниров
+    if history:
+        lines.append("<b>История турниров</b>")
+        for created_at, entry_text in history:
+            lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
 
     return "\n".join(lines)
+
 
 def display_name(user: dict | None, fallback_fullname: str | None = None) -> str:
     try:
