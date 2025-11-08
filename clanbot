@@ -846,7 +846,7 @@ async def cmd_player(message: Message, command: Command):
         await message.answer("Пользователь не найден.")
         return
 
-    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id, actor_id=message.from_user.id))
+    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id))
 
 @dp.callback_query(F.data.startswith("profile_refresh:"))
 async def on_profile_refresh(call: CallbackQuery):
