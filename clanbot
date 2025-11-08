@@ -2423,7 +2423,7 @@ async def cmd_menu(message: Message):
     if row:
         _, opponents, *_ = row
         btn = f'Регистрация на КВ "{opponents}"'
-await message.answer("<b>Меню</b>\nВыберите действие:", reply_markup=clan_menu_kb(btn))
+    await message.answer("<b>Меню</b>\nВыберите действие:", reply_markup=clan_menu_kb(btn))
 
 @dp.callback_query(F.data == "menu:contacts")
 async def on_menu_contacts(call: CallbackQuery):
