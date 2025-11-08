@@ -1204,7 +1204,7 @@ async def on_reject(call: CallbackQuery):
 @dp.message(or_f(F.text == "/profile", F.text == "profile"))
 async def cmd_profile(message: Message):
     user = await get_user(message.from_user.id)
-    if not user:
+if not user:
         # История турниров
 history = await get_tournament_history(message.from_user.id)
 if history:
