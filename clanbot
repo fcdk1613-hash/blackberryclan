@@ -50,6 +50,37 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in code (fill BOT_TOKEN at the top of main.py)")
 
 # ======= DB LAYER =======
+
+CREATE_TOURNAMENT_HISTORY_SQL = """
+CREATE TABLE IF NOT EXISTS tournament_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    author_id INTEGER,
+    entry_text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+async def add_tournament_history_entry(user_id: int, author_id: int | None, entry_text: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO tournament_history(user_id, author_id, entry_text, created_at) VALUES (?,?,?,?)",
+            (user_id, author_id, entry_text.strip(), datetime.utcnow().isoformat())
+        )
+        await db.commit()
+
+async def get_tournament_history(user_id: int) -> list[tuple[str, str]]:
+    # returns list of (created_at, entry_text)
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT created_at, entry_text FROM tournament_history WHERE user_id = ? ORDER BY id ASC",
+            (user_id,)
+        ) as cur:
+            return await cur.fetchall()
+
+async def clear_tournament_history(user_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM tournament_history WHERE user_id=?", (user_id,))
+        await db.commit()
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -149,6 +180,7 @@ async def init_db():
         await db.execute(CREATE_SETTINGS_SQL)
         await db.execute(CREATE_USERS_SQL)
         await db.execute(CREATE_USERS_ARCHIVE_SQL)
+        await db.execute(CREATE_TOURNAMENT_HISTORY_SQL)
         await db.execute(CREATE_REMOVE_TABLE_SQL)
         # Migrations
         for alter in [
@@ -264,6 +296,10 @@ class RegStates(StatesGroup):
     waiting_tg_link = State()
 
 
+
+class TournamentHistory(StatesGroup):
+    waiting_text = State()
+
 class AdminEdit(StatesGroup):
     waiting_value = State()
 
@@ -273,6 +309,55 @@ class ReserveUntilState(StatesGroup):
 class TrainingReason(StatesGroup):
     waiting_reason = State()
 
+
+
+@dp.callback_query(F.data.startswith("hist:add:"))
+async def on_hist_add(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid = call.data.split(":")
+    await state.update_data(hist_target_id=int(uid))
+    await call.message.answer("Введите текст записи для истории турниров (одним сообщением).")
+    await state.set_state(TournamentHistory.waiting_text)
+    await call.answer()
+
+@dp.message(TournamentHistory.waiting_text)
+async def on_hist_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("hist_target_id")
+    if not target_id:
+        await message.answer("Целевой игрок не найден.")
+        await state.clear()
+        return
+    text = message.text.strip()
+    if not text:
+        await message.answer("Пустая запись не добавлена.")
+        return
+    await add_tournament_history_entry(target_id, message.from_user.id, text)
+    await state.clear()
+    # Refresh admin view if possible
+    user = await get_user(target_id)
+    try:
+        await message.answer("✅ Запись добавлена.", reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id))
+        await message.answer(format_profile(user))
+    except Exception:
+        pass
+
+@dp.callback_query(F.data.startswith("hist:clear:"))
+async def on_hist_clear(call: CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, uid = call.data.split(":")
+    target_id = int(uid)
+    await clear_tournament_history(target_id)
+    user = await get_user(target_id)
+    try:
+        await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+    except Exception:
+        await call.message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+    await call.answer("История очищена.")
 
 # ======= BOT SETUP =======
 logging.basicConfig(level=logging.INFO)
@@ -312,13 +397,19 @@ def apply_kb() -> InlineKeyboardMarkup:
     kb.button(text="📨 Отправить заявку", callback_data="send_apply")
     return kb.adjust(1).as_markup()
 
-def profile_admin_kb(user_id: int) -> InlineKeyboardMarkup:
+def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎯 Выбрать фракцию", callback_data=f"profile_choosefac:{user_id}")
     kb.button(text="🗑 Удалить игрока", callback_data=f"remove:init:{user_id}")
     kb.row()
     kb.button(text="✏️ Редактировать", callback_data=f"edit:init:{user_id}")
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
+    kb.row()
+    kb.button(text="➕ Добавить запись в историю", callback_data=f"hist:add:{user_id}")
+    if actor_id in (ADMIN_IDS | MODERATOR_IDS):
+        pass  # visibility already allowed
+    if actor_id in ADMIN_IDS:
+        kb.button(text="🧹 Очистить историю игрока", callback_data=f"hist:clear:{user_id}")
     return kb.adjust(1).as_markup()
 
 
@@ -384,6 +475,16 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
+    # История турниров
+try:
+    import asyncio as _asyncio
+    hist = _asyncio.get_event_loop().run_until_complete(get_tournament_history(int(user.get("user_id"))))
+except Exception:
+    hist = []
+if hist:
+    lines.append("\n<b>История турниров</b>")
+    for created_at, entry_text in hist:
+        lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
     return "\n".join(lines)
 
 
@@ -741,7 +842,7 @@ async def cmd_player(message: Message, command: Command):
         await message.answer("Пользователь не найден.")
         return
 
-    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"]))
+    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"] actor_id=message.from_user.id, actor_id=message.from_user.id))
 
 @dp.callback_query(F.data.startswith("profile_refresh:"))
 async def on_profile_refresh(call: CallbackQuery):
@@ -755,7 +856,7 @@ async def on_profile_refresh(call: CallbackQuery):
         await call.answer("Пользователь не найден.", show_alert=True)
         return
     try:
-        await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id))
+        await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
     except Exception:
         pass
     await call.answer("Профиль обновлён.")
@@ -790,7 +891,7 @@ async def on_profile_back(call: CallbackQuery):
         await call.answer("Пользователь не найден.", show_alert=True)
         return
     try:
-        await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id))
+        await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
     except Exception:
         pass
     await call.answer()
@@ -816,7 +917,7 @@ async def on_profile_set_faction(call: CallbackQuery, state: FSMContext):
         await send_faction_notice(target_id, title)
         user = await get_user(target_id)
         try:
-            await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id))
+            await call.message.edit_text(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
         except Exception:
             pass
         await call.answer(f"Фракция установлена: {title}")
@@ -907,10 +1008,10 @@ async def on_edit_value(message: Message, state: FSMContext):
             chat_id=data.get("chat_id"),
             message_id=data.get("edit_message_id"),
             text=format_profile(user),
-            reply_markup=profile_admin_kb(target_id)
+            reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id)
         )
     except Exception:
-        await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id))
+        await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
 
     # Log change
     try:
@@ -1104,7 +1205,15 @@ async def on_reject(call: CallbackQuery):
 async def cmd_profile(message: Message):
     user = await get_user(message.from_user.id)
     if not user:
-        await message.answer("Профиль не найден. Нажмите /start")
+        # История турниров
+history = await get_tournament_history(message.from_user.id)
+if history:
+    lines.append("
+<b>История турниров</b>")
+    for created_at, entry_text in history:
+        lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
+await message.answer("
+".join(lines))
         return
     lines = ["<b>Ваш профиль</b>"]
     fields = [
@@ -1119,8 +1228,16 @@ async def cmd_profile(message: Message):
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
-    await message.answer("\n".join(lines))
-@dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
+    # История турниров
+history = await get_tournament_history(message.from_user.id)
+if history:
+    lines.append("
+<b>История турниров</b>")
+    for created_at, entry_text in history:
+        lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
+await message.answer("
+".join(lines)))
+@dp.message@dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
 async def on_user_joined_clan(message: Message):
     for member in message.new_chat_members:
         uid = member.id
@@ -2384,12 +2501,12 @@ async def on_reserve_until_input(message: Message, state: FSMContext):
     panel_msg_id = data.get("panel_msg_id")
     try:
         if panel_chat_id and panel_msg_id:
-            await bot.edit_message_text(chat_id=panel_chat_id, message_id=panel_msg_id, text=format_profile(user), reply_markup=profile_admin_kb(target_id))
+            await bot.edit_message_text(chat_id=panel_chat_id, message_id=panel_msg_id, text=format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
         else:
-            await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id))
+            await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
     except Exception:
         try:
-            await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id))
+            await message.answer(format_profile(user), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
         except Exception:
             pass
     await message.answer("✅ Перевод в резерв сохранён.")
@@ -2609,7 +2726,7 @@ async def find_player_query(message: Message, state: FSMContext):
         await message.answer("Пользователь не найден.")
         return
 
-    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"]))
+    await message.answer(format_profile(target_user), reply_markup=profile_admin_kb(target_user["user_id"] actor_id=message.from_user.id, actor_id=message.from_user.id))
     await state.clear()
 
 if __name__ == "__main__":
