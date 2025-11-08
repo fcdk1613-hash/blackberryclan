@@ -456,7 +456,7 @@ def pad_clan_id(v: Optional[int]) -> str:
         return "—"
     return f"{int(v):04d}"
 
-def format_profile(user: dict, title: str = \"Профиль игрока\", history: list | None = None) -> str:
+def format_profile(user: dict, title: str = "Профиль игрока", history: list | None = None) -> str:
     lines = [f"<b>{title}</b>"]
     fields = [
         ("ClanID", pad_clan_id(user.get("clan_id"))),
