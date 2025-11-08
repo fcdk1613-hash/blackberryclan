@@ -1208,8 +1208,7 @@ async def cmd_profile(message: Message):
         # История турниров
 history = await get_tournament_history(message.from_user.id)
 if history:
-    lines.append("
-<b>История турниров</b>")
+    lines.append("<b>История турниров</b>")
     for created_at, entry_text in history:
         lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
 await message.answer("
