@@ -1227,8 +1227,7 @@ if history:
     lines.append("<b>История турниров</b>")
     for created_at, entry_text in history:
         lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
-await message.answer("
-".join(lines)))
+await message.answer("\n".join(lines)))
 @dp.message@dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
 async def on_user_joined_clan(message: Message):
     for member in message.new_chat_members:
