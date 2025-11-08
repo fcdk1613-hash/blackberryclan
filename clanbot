@@ -476,15 +476,19 @@ def format_profile(user: dict, title: str = "Профиль игрока") -> st
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
     # История турниров
-try:
-    import asyncio as _asyncio
-    hist = _asyncio.get_event_loop().run_until_complete(get_tournament_history(int(user.get("user_id"))))
-except Exception:
-    hist = []
-if hist:
-    lines.append("\n<b>История турниров</b>")
-    for created_at, entry_text in hist:
-        lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
+    try:
+        import asyncio as _asyncio
+        hist = _asyncio.get_event_loop().run_until_complete(
+            get_tournament_history(int(user.get("user_id")))
+        )
+    except Exception:
+        hist = []
+
+    if hist:
+        lines.append("\n<b>История турниров</b>")
+        for created_at, entry_text in hist:
+            lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
+
     return "\n".join(lines)
 
 
