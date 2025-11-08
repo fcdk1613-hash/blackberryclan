@@ -1225,14 +1225,17 @@ async def cmd_profile(message: Message):
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
-    # История турниров
-history = await get_tournament_history(message.from_user.id)
-if history:
-    lines.append("<b>История турниров</b>")
-    for created_at, entry_text in history:
-        lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
-await message.answer("\n".join(lines))
-@dp.message@dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
+  # История турниров
+    history = await get_tournament_history(message.from_user.id)
+    if history:
+        lines.append("\n<b>История турниров</b>")
+        for created_at, entry_text in history:
+            lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
+
+    await message.answer("\n".join(lines))
+
+
+@dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
 async def on_user_joined_clan(message: Message):
     for member in message.new_chat_members:
         uid = member.id
@@ -1281,6 +1284,7 @@ async def on_user_joined_clan(message: Message):
                 f"Дата вступления: {user.get('joined_at') or now_iso}"
             )
             await send_to_moderation(join_text)
+
 
 @dp.message(F.new_chat_members)
 async def on_user_joined_any(message: Message):
