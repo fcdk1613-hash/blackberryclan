@@ -2885,7 +2885,7 @@ async def CW_cmd_admin(message: Message):
         await message.answer("Активных КВ нет. Используйте /cw_create."); return
     kb = InlineKeyboardBuilder()
     for w in wars:
-        kb.button(text=f"{w['opponents']} — {w['starts_at']}", callback_data=f"cw:panel:{w['id']}")
+        kb.button(text=f"⚔{w['opponents']} — {w['starts_at']}", callback_data=f"cw:panel:{w['id']}")
     await message.answer("Выберите КВ:", reply_markup=kb.adjust(1).as_markup())
 
 @dp.callback_query(F.data.startswith("cw:panel:"))
@@ -2902,10 +2902,10 @@ async def CW_admin_panel(call: CallbackQuery):
         u = await get_user(uid)
         names.append(display_name(u, fallback_fullname=str(uid)))
     info = (
-        f"<b>{w['opponents']}</b>\n"
-        f"Время: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
-        f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
-        f"<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
+        f"⚔<b>{w['opponents']}</b>\n"
+        f"⏰Время: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"⚖Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
+        f"☠<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
     )
     kb = InlineKeyboardBuilder()
     for uid in regs:
