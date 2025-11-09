@@ -35,6 +35,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
+CW_SCHEDULER = None  # AsyncIOScheduler will be set in main()
+
+
 # ======= CONFIG =======
 BOT_TOKEN = "8351592944:AAHXUVRpePbaBLmBkLkdicrQpeX-aulJoYY"                     # ← token from @BotFather (required)
 CHANNEL_USERNAME = "@SquadBlackBerry"
@@ -116,6 +119,34 @@ CREATE TABLE IF NOT EXISTS removal_checklist (
     discord_done INTEGER DEFAULT 0
 );
 """
+CREATE_CW_WARS_SQL = """
+CREATE TABLE IF NOT EXISTS cw_wars (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    opponents TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    map TEXT,
+    team_size INTEGER NOT NULL,
+    rules TEXT,
+    server TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    winner TEXT
+);
+"""
+CREATE_CW_REGS_SQL = """
+CREATE TABLE IF NOT EXISTS cw_registrations (
+    war_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (war_id, user_id),
+    FOREIGN KEY (war_id) REFERENCES cw_wars(id) ON DELETE CASCADE
+);
+"""
+# Idempotent per-user CW stats
+CW_ALTERS_USERS = [
+    "ALTER TABLE users ADD COLUMN cw_wins INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN cw_losses INTEGER DEFAULT 0",
+]
+
 
 class Status(str, Enum):
     NEW = "new"
@@ -182,9 +213,13 @@ async def init_db():
         await db.execute(CREATE_USERS_ARCHIVE_SQL)
         await db.execute(CREATE_TOURNAMENT_HISTORY_SQL)
         await db.execute(CREATE_REMOVE_TABLE_SQL)
+        await db.execute(CREATE_CW_WARS_SQL)
+        await db.execute(CREATE_CW_REGS_SQL)
         # Migrations
         for alter in [
             "ALTER TABLE users ADD COLUMN applied_at TEXT",
+            "ALTER TABLE users ADD COLUMN cw_wins INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN cw_losses INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN reserve_until TEXT",
             "ALTER TABLE users ADD COLUMN birth_date TEXT",
             "ALTER TABLE users ADD COLUMN faction TEXT",
@@ -478,7 +513,10 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
-    # История турниров — история передаётся в аргументе `history`
+    cw_wins = user.get("cw_wins") or 0
+    cw_losses = user.get("cw_losses") or 0
+    lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+# История турниров — история передаётся в аргументе `history`
     if history:
         lines.append("\n<b>История турниров</b>")
         for created_at, entry_text in history:
@@ -505,6 +543,91 @@ def display_name(user: dict | None, fallback_fullname: str | None = None) -> str
     except Exception:
         uname = None
     return f"{nick} (@{uname})" if uname else nick
+
+# ======= CLAN WAR (CW) HELPERS =======
+async def CW_create_war(opponents: str, starts_at_iso: str, map_: str, team_size: int, rules: str, server: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO cw_wars(opponents, starts_at, map, team_size, rules, server) VALUES (?,?,?,?,?,?)",
+            (opponents.strip(), starts_at_iso, map_.strip(), int(team_size), rules.strip(), server.strip())
+        )
+        await db.commit()
+        return cur.lastrowid
+
+async def CW_get_war(war_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT * FROM cw_wars WHERE id=?", (war_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+
+async def CW_list_active() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT * FROM cw_wars WHERE status='scheduled' ORDER BY datetime(starts_at) ASC")
+        rows = await cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+async def CW_list_finished(limit: int = 20) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT * FROM cw_wars WHERE status='finished' ORDER BY datetime(starts_at) DESC LIMIT ?", (limit,))
+        rows = await cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+async def CW_registrations(war_id: int) -> list[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM cw_registrations WHERE war_id=? ORDER BY created_at ASC", (war_id,))
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+async def CW_is_registered(war_id: int, user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM cw_registrations WHERE war_id=? AND user_id=?", (war_id, user_id))
+        return await cur.fetchone() is not None
+
+async def CW_register(war_id: int, user_id: int) -> tuple[bool, str]:
+    war = await CW_get_war(war_id)
+    if not war or war.get("status") != "scheduled":
+        return False, "КВ не найдено или уже завершено."
+    regs = await CW_registrations(war_id)
+    if user_id in regs:
+        return False, "Вы уже зарегистрированы."
+    if len(regs) >= int(war["team_size"]):
+        return False, "Регистрация недоступна: достигнут максимальный размер команды."
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "INSERT INTO cw_registrations(war_id, user_id, created_at) VALUES (?,?,?)",
+                (war_id, user_id, datetime.utcnow().isoformat())
+            )
+            await db.commit()
+        except Exception:
+            return False, "Не удалось зарегистрироваться."
+    return True, "Вы зарегистрированы на КВ."
+
+async def CW_unregister(war_id: int, user_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM cw_registrations WHERE war_id=? AND user_id=?", (war_id, user_id))
+        await db.commit()
+
+async def CW_finish(war_id: int, winner_label: str) -> bool:
+    war = await CW_get_war(war_id)
+    if not war or war.get("status") != "scheduled":
+        return False
+    regs = await CW_registrations(war_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE cw_wars SET status='finished', winner=? WHERE id=?", (winner_label, war_id))
+        if winner_label == "Blackberry":
+            for uid in regs:
+                await db.execute("UPDATE users SET cw_wins = COALESCE(cw_wins,0) + 1 WHERE user_id=?", (uid,))
+        else:
+            for uid in regs:
+                await db.execute("UPDATE users SET cw_losses = COALESCE(cw_losses,0) + 1 WHERE user_id=?", (uid,))
+        await db.commit()
+    return True
 
 
 # ======= HELPERS =======
@@ -1221,7 +1344,10 @@ async def cmd_profile(message: Message):
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
-    # История турниров
+    cw_wins = user.get("cw_wins") or 0
+    cw_losses = user.get("cw_losses") or 0
+    lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+
     history = await get_tournament_history(message.from_user.id)
     if history:
         lines.append("\n<b>История турниров</b>")
@@ -2360,10 +2486,66 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.button(text="Полезные контакты", callback_data="menu:contacts")
     kb.button(text="Предстоящие ивенты", callback_data="menu:events")
     kb.row()
+    kb.button(text="Клановые войны", callback_data="menu:cw")
+    kb.row()
     kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
     return kb.adjust(1).as_markup()
 
+
+@dp.callback_query(F.data == "menu:cw")
+async def CW_menu_list(call: CallbackQuery):
+    wars = await CW_list_active()
+    if not wars:
+        await call.answer("Нет активных КВ.", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    for w in wars:
+        kb.button(text=f"{w['opponents']} — {w['starts_at']}", callback_data=f"cw:view:{w['id']}")
+    await call.message.answer("<b>Активные КВ</b>", reply_markup=kb.adjust(1).as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:view:"))
+async def CW_menu_view(call: CallbackQuery):
+    war_id = int(call.data.split(":")[2])
+    w = await CW_get_war(war_id)
+    if not w:
+        await call.answer("КВ не найдено.", show_alert=True); return
+    regs = await CW_registrations(war_id)
+    free = max(0, int(w['team_size']) - len(regs))
+    info = (
+        f"<b>{w['opponents']}</b>\n"
+        f"Когда: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n"
+        f"Записались: {len(regs)} / {w['team_size']} (свободно: {free})"
+    )
+    kb = InlineKeyboardBuilder()
+    if call.from_user.id not in regs and free > 0:
+        kb.button(text=f"Регистрация на КВ \"{w['opponents']}\"", callback_data=f"cw:ask:{war_id}")
+    await call.message.answer(info, reply_markup=kb.adjust(1).as_markup() if kb.buttons else None)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:ask:"))
+async def CW_menu_ask(call: CallbackQuery):
+    war_id = int(call.data.split(":")[2])
+    w = await CW_get_war(war_id)
+    if not w:
+        await call.answer("КВ не найдено."); return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Да", callback_data=f"cw:confirm:{war_id}")
+    kb.button(text="Нет", callback_data="cw:cancel")
+    await call.message.answer(f"Вы подтверждаете регистрацию на КВ? Возможности отмены нет.\nКВ: {w['opponents']}", reply_markup=kb.adjust(2).as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:confirm:"))
+async def CW_menu_confirm(call: CallbackQuery):
+    war_id = int(call.data.split(":")[2])
+    ok, msg = await CW_register(war_id, call.from_user.id)
+    await call.answer(msg, show_alert=not ok)
+
+@dp.callback_query(F.data == "cw:cancel")
+async def CW_menu_cancel(call: CallbackQuery):
+    await call.answer("Отменено.")
 def _is_joined_status(user: dict | None) -> bool:
     try:
         st = (user or {}).get("status")
@@ -2539,6 +2721,8 @@ async def main():
     # Scheduler for training polls and inactivity checks
     try:
         scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
+        global CW_SCHEDULER
+        CW_SCHEDULER = scheduler
         scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
         scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
@@ -2583,6 +2767,183 @@ async def main():
 
 
 
+
+class CWCreateState(StatesGroup):
+    opponents = State()
+    starts = State()
+    map = State()
+    team = State()
+    rules = State()
+    server = State()
+
+@dp.message(Command("cw_create"))
+async def CW_cmd_create(message: Message, state: FSMContext):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы."); return
+    await message.answer("Введите противников (пример: BB vs CL):")
+    await state.set_state(CWCreateState.opponents)
+
+@dp.message(CWCreateState.opponents)
+async def CW_create_opponents(message: Message, state: FSMContext):
+    await state.update_data(opponents=message.text.strip())
+    await message.answer("Введите дату и время проведения в формате ДД.ММ.ГГ ЧЧ:ММ:")
+    await state.set_state(CWCreateState.starts)
+
+@dp.message(CWCreateState.starts)
+async def CW_create_starts(message: Message, state: FSMContext):
+    raw = message.text.strip()
+    try:
+        dt = datetime.strptime(raw, "%d.%m.%y %H:%M")
+        starts_iso = dt.isoformat()
+    except Exception:
+        await message.answer("Неверный формат. Повторите: ДД.ММ.ГГ ЧЧ:ММ"); return
+    await state.update_data(starts_at=starts_iso)
+    await message.answer("Карта:")
+    await state.set_state(CWCreateState.map)
+
+@dp.message(CWCreateState.map)
+async def CW_create_map(message: Message, state: FSMContext):
+    await state.update_data(map=message.text.strip())
+    await message.answer("Размер команды (число):")
+    await state.set_state(CWCreateState.team)
+
+@dp.message(CWCreateState.team)
+async def CW_create_team(message: Message, state: FSMContext):
+    try:
+        team = int(message.text.strip())
+        if team <= 0: raise ValueError
+    except Exception:
+        await message.answer("Введите положительное число."); return
+    await state.update_data(team_size=team)
+    await message.answer("Правила:")
+    await state.set_state(CWCreateState.rules)
+
+@dp.message(CWCreateState.rules)
+async def CW_create_rules(message: Message, state: FSMContext):
+    await state.update_data(rules=message.text.strip())
+    await message.answer("Сервер игры:")
+    await state.set_state(CWCreateState.server)
+
+@dp.message(CWCreateState.server)
+async def CW_create_finish(message: Message, state: FSMContext):
+    data = await state.get_data()
+    war_id = await CW_create_war(
+        opponents=data.get("opponents"),
+        starts_at_iso=data.get("starts_at"),
+        map_=data.get("map"),
+        team_size=int(data.get("team_size")),
+        rules=data.get("rules"),
+        server=message.text.strip(),
+    )
+    await state.clear()
+    await message.answer(f"✅ КВ создано (ID: {war_id}). Откройте панель: /cw_admin")
+    # schedule reminders (24h, 12h, 6h)
+    try:
+        if CW_SCHEDULER:
+            run_dt = datetime.fromisoformat(data.get("starts_at"))
+            for hours in (24, 12, 6):
+                trig_dt = run_dt - timedelta(hours=hours)
+                if trig_dt > datetime.utcnow():
+                    CW_SCHEDULER.add_job(CW_send_reminder_job, trigger="date", run_date=trig_dt, args=[war_id, hours])
+    except Exception:
+        pass
+
+async def CW_send_reminder_job(war_id: int, hours_before: int):
+    w = await CW_get_war(war_id)
+    if not w or w.get("status") != "scheduled":
+        return
+    regs = await CW_registrations(war_id)
+    if not regs:
+        return
+    text = (
+        f"Напоминание: КВ через {hours_before} ч.\n"
+        f"{w['opponents']}\nВремя: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nСервер: {w.get('server') or '-'}"
+    )
+    for uid in regs:
+        try:
+            await bot.send_message(uid, text)
+        except Exception:
+            pass
+
+@dp.message(Command("cw_admin"))
+async def CW_cmd_admin(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы."); return
+    wars = await CW_list_active()
+    if not wars:
+        await message.answer("Активных КВ нет. Используйте /cw_create."); return
+    kb = InlineKeyboardBuilder()
+    for w in wars:
+        kb.button(text=f"{w['opponents']} — {w['starts_at']}", callback_data=f"cw:panel:{w['id']}")
+    await message.answer("Выберите КВ:", reply_markup=kb.adjust(1).as_markup())
+
+@dp.callback_query(F.data.startswith("cw:panel:"))
+async def CW_admin_panel(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    war_id = int(call.data.split(":")[2])
+    w = await CW_get_war(war_id)
+    if not w:
+        await call.answer("КВ не найдено.", show_alert=True); return
+    regs = await CW_registrations(war_id)
+    names = []
+    for uid in regs:
+        u = await get_user(uid)
+        names.append(display_name(u, fallback_fullname=str(uid)))
+    info = (
+        f"<b>{w['opponents']}</b>\n"
+        f"Время: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
+        f"<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
+    )
+    kb = InlineKeyboardBuilder()
+    for uid in regs:
+        kb.button(text=f"❌ Удалить {uid}", callback_data=f"cw:del:{war_id}:{uid}")
+    kb.row()
+    kb.button(text="🏁 Завершить КВ", callback_data=f"cw:finish:{war_id}")
+    await call.message.answer(info, reply_markup=kb.adjust(1).as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:del:"))
+async def CW_admin_remove_player(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    _, _, war_id_s, uid_s = call.data.split(":")
+    await CW_unregister(int(war_id_s), int(uid_s))
+    await call.answer("Удалён. Регистрация снова доступна при наличии мест.")
+
+@dp.callback_query(F.data.startswith("cw:finish:"))
+async def CW_admin_finish_ask(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    war_id = int(call.data.split(":")[2])
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Blackberry победил", callback_data=f"cw:finishset:{war_id}:bb")
+    kb.button(text="Противник победил", callback_data=f"cw:finishset:{war_id}:opp")
+    await call.message.answer("Укажите победителя:", reply_markup=kb.adjust(1).as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:finishset:"))
+async def CW_admin_finish_set(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    _, _, war_id_s, who = call.data.split(":")
+    label = "Blackberry" if who == "bb" else "Противник"
+    ok = await CW_finish(int(war_id_s), label)
+    await call.answer("Завершено." if ok else "Не удалось завершить.")
+
+@dp.message(Command("cw_stats"))
+async def CW_cmd_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы."); return
+    rows = await CW_list_finished(limit=50)
+    if not rows:
+        await message.answer("Прошедших КВ пока нет."); return
+    lines = ["<b>Статистика КВ — прошедшие</b>"]
+    for w in rows:
+        res = w.get("winner") or "—"
+        lines.append(f"• {w['starts_at']} — {w['opponents']} — результат: {res}")
+    await message.answer("\n".join(lines))
 # ======= Admin Menu (/amenu) & Find Player flow =======
 class FindPlayerState(StatesGroup):
     waiting_query = State()
@@ -2593,6 +2954,8 @@ def admin_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Список игроков"), KeyboardButton(text="Статус посещения")],
             [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Изменить контакты")],
             [KeyboardButton(text="Изменить ивенты"), KeyboardButton(text="Найти игрока")],
+            [KeyboardButton(text="Создать КВ"), KeyboardButton(text="КВ (админ)")],
+            [KeyboardButton(text="Статистика КВ")],
             [KeyboardButton(text="Закрыть меню")],
         ],
         resize_keyboard=True,
@@ -2613,6 +2976,39 @@ async def close_admin_menu(message: Message):
     await message.answer("Меню скрыто.", reply_markup=ReplyKeyboardRemove())
 
 # --- Label -> command dispatchers ---
+@dp.message(F.text == "Создать КВ")
+async def on_label_cw_create(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/cw_create")
+    try:
+        await CW_cmd_create(fake)  # type: ignore
+    except Exception:
+        await message.answer("/cw_create")
+
+@dp.message(F.text == "КВ (админ)")
+async def on_label_cw_admin(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/cw_admin")
+    try:
+        await CW_cmd_admin(fake)  # type: ignore
+    except Exception:
+        await message.answer("/cw_admin")
+
+@dp.message(F.text == "Статистика КВ")
+async def on_label_cw_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    fake = _as_command(message, "/cw_stats")
+    try:
+        await CW_cmd_stats(fake)  # type: ignore
+    except Exception:
+        await message.answer("/cw_stats")
+
 def _as_command(message: Message, text: str) -> Message:
     try:
         # aiogram v3 models support model_copy
