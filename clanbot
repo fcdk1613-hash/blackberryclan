@@ -515,7 +515,7 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
             lines.append(f"{k}: {v}")
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
-    lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+    lines.append(f"КВ: победы/поражения — ✅{cw_wins}/❌{cw_losses}")
 # История турниров — история передаётся в аргументе `history`
     if history:
         lines.append("\n<b>История турниров</b>")
