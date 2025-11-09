@@ -2789,7 +2789,7 @@ class CWCreateState(StatesGroup):
 
 @dp.message(Command("cw_create"))
 async def CW_cmd_create(message: Message, state: FSMContext):
-    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+    if message.from_user.id not in (ADMIN_IDS):
         await message.answer("Только модераторы/администраторы."); return
     await message.answer("Введите противников (пример: BB vs CL):")
     await state.set_state(CWCreateState.opponents)
