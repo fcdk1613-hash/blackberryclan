@@ -33,6 +33,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from zoneinfo import ZoneInfo
 
 # ======= CONFIG =======
@@ -2353,8 +2354,14 @@ async def cmd_seed(message: Message):
 
 
 # ======= MENU (joined-only) =======
-def clan_menu_kb() -> InlineKeyboardMarkup:
+def clan_menu_kb(cw_button_text: Optional[str] = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    if cw_button_text:
+        kb.button(text=cw_button_text, callback_data="menu:cw")
+        kb.row()
+    kb.button(text="⚔️ Список КВ", callback_data="menu:cw_list")
+    kb.button(text="📜 История КВ", callback_data="menu:cw_history")
+    kb.row()
     kb.button(text="Изменить статус посещения", callback_data="menu:change_attendance")
     kb.row()
     kb.button(text="Полезные контакты", callback_data="menu:contacts")
@@ -2414,7 +2421,12 @@ async def cmd_menu(message: Message):
     if not user or not _is_joined_status(user):
         await message.answer("Доступно только для игроков, вступивших в клан (статус: joined).")
         return
-    await message.answer("<b>Меню</b>\nВыберите действие:", reply_markup=clan_menu_kb())
+    row = await get_active_cw()
+    btn = None
+    if row:
+        _, opponents, *_ = row
+        btn = f'Регистрация на КВ "{opponents}"'
+    await message.answer("<b>Меню</b>\nВыберите действие:", reply_markup=clan_menu_kb(btn))
 
 @dp.callback_query(F.data == "menu:contacts")
 async def on_menu_contacts(call: CallbackQuery):
@@ -2535,10 +2547,13 @@ async def check_reserve_expired():
 async def main():
     await init_db()
     await ensure_training_tables()
+    await ensure_cw_tables()
     logging.info("DB initialized at %s", DB_PATH)
     # Scheduler for training polls and inactivity checks
     try:
         scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
+        global SCHEDULER
+        SCHEDULER = scheduler
         scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
         scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
@@ -2756,3 +2771,476 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
+
+# ========================= Clan Wars (КВ) =========================
+# Модуль КВ интегрирован без удаления существующего кода.
+SCHEDULER = None  # инициализируется в main()
+
+class CWCreate(StatesGroup):
+    waiting_opponents = State()
+    waiting_datetime = State()
+    waiting_map = State()
+    waiting_team_size = State()
+    waiting_rules = State()
+    waiting_server = State()
+
+async def ensure_cw_tables():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS clan_wars(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                opponents TEXT NOT NULL,
+                start_at TEXT NOT NULL,
+                map TEXT,
+                team_size INTEGER NOT NULL,
+                rules TEXT,
+                server TEXT,
+                status TEXT NOT NULL DEFAULT 'planned',
+                winner TEXT
+            )"""
+        )
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS clan_war_regs(
+                war_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                registered_at TEXT NOT NULL,
+                PRIMARY KEY (war_id, user_id),
+                FOREIGN KEY (war_id) REFERENCES clan_wars(id) ON DELETE CASCADE
+            )"""
+        )
+        # Статистика в профиле
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN cw_wins INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN cw_losses INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        await db.commit()
+
+def cw_admin_kb(war_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔄 Обновить", callback_data=f"cw:open:{war_id}")
+    kb.button(text="🏁 Завершить КВ", callback_data=f"cw:finish:{war_id}")
+    kb.button(text="⬅️ Назад", callback_data="cw:list")
+    return kb.adjust(2,1).as_markup()
+
+def cw_list_admin_kb(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for wid, opponents, start_at, status in rows:
+        dt = start_at.replace('T', ' ')
+        kb.button(text=f"{opponents} • {dt} • {status}", callback_data=f"cw:open:{wid}")
+    kb.button(text="➕ Создать КВ", callback_data="cw:create")
+    return kb.adjust(1).as_markup()
+
+def cw_registration_kb(war_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Подтвердить регистрацию", callback_data=f"cw:confirm:{war_id}")
+    kb.button(text="❌ Отмена", callback_data="cw:cancel")
+    return kb.adjust(1).as_markup()
+
+async def get_active_cw():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, opponents, start_at, map, team_size, rules, server FROM clan_wars WHERE status='planned' ORDER BY datetime(start_at) ASC LIMIT 1"
+        )
+        row = await cur.fetchone()
+    return row
+
+async def get_cw_participants(war_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT u.user_id, u.nickname, u.username FROM clan_war_regs r JOIN users u ON u.user_id=r.user_id WHERE r.war_id=? ORDER BY r.registered_at ASC", (war_id,))
+        return await cur.fetchall()
+
+def _cw_info_text(opponents: str, start_at_iso: str, map_name: str, team_size: int, rules: str, server: str, regs_count: int) -> str:
+    dt = datetime.fromisoformat(start_at_iso)
+    when = dt.strftime("%d.%m.%y %H:%M")
+    return (
+        f"<b>Клановая война</b>\n"
+        f"Противники: {opponents}\n"
+        f"Дата/время: {when}\n"
+        f"Карта: {map_name or '-'}\n"
+        f"Размер команды: {team_size}\n"
+        f"Правила: {rules or '-'}\n"
+        f"Сервер: {server or '-'}\n"
+        f"Зарегистрировано: {regs_count}/{team_size}"
+    )
+
+@dp.message(F.text == "Создать КВ")
+async def cw_create_start(message: Message, state: FSMContext):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    await message.answer("Создаём новую КВ.\n1/6. Введите противников (пример: BB vs CL):")
+    await state.set_state(CWCreate.waiting_opponents)
+
+@dp.message(CWCreate.waiting_opponents)
+async def cw_create_opponents(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Пусто. Введите противников, например: BB vs CL")
+        return
+    await state.update_data(opponents=text)
+    await message.answer("2/6. Введите дату и время в формате ДД.ММ.ГГ ЧЧ:ММ")
+    await state.set_state(CWCreate.waiting_datetime)
+
+@dp.message(CWCreate.waiting_datetime)
+async def cw_create_dt(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    try:
+        dt = datetime.strptime(raw, "%d.%m.%y %H:%M")
+    except Exception:
+        await message.answer("Неверный формат. Пример: 25.12.25 19:00")
+        return
+    await state.update_data(start_at=dt.isoformat())
+    await message.answer("3/6. Карта (можно пропустить «-»)")
+    await state.set_state(CWCreate.waiting_map)
+
+@dp.message(CWCreate.waiting_map)
+async def cw_create_map(message: Message, state: FSMContext):
+    await state.update_data(map=message.text.strip() if message.text else None)
+    await message.answer("4/6. Размер команды (число)")
+    await state.set_state(CWCreate.waiting_team_size)
+
+@dp.message(CWCreate.waiting_team_size)
+async def cw_create_team_size(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("Введите число, например 12")
+        return
+    await state.update_data(team_size=int(raw))
+    await message.answer("5/6. Правила (текст, можно «-»)")
+    await state.set_state(CWCreate.waiting_rules)
+
+@dp.message(CWCreate.waiting_rules)
+async def cw_create_rules(message: Message, state: FSMContext):
+    await state.update_data(rules=message.text.strip() if message.text else None)
+    await message.answer("6/6. Сервер игры (текст, можно «-»)")
+    await state.set_state(CWCreate.waiting_server)
+
+async def _schedule_cw_reminders(war_id: int, start_iso: str):
+    if not SCHEDULER:
+        return
+    try:
+        start = datetime.fromisoformat(start_iso)
+        for hours in (24, 12, 6):
+            run_at = start - timedelta(hours=hours)
+            if run_at.tzinfo:
+                now = datetime.now(run_at.tzinfo)
+            else:
+                now = datetime.now()
+            if run_at > now:
+                SCHEDULER.add_job(send_cw_reminder, DateTrigger(run_date=run_at), args=[war_id, hours], id=f"cw_{war_id}_{hours}", replace_existing=True)
+    except Exception:
+        pass
+
+@dp.message(CWCreate.waiting_server)
+async def cw_create_server(message: Message, state: FSMContext):
+    await state.update_data(server=message.text.strip() if message.text else None)
+    data = await state.get_data()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO clan_wars(opponents, start_at, map, team_size, rules, server) VALUES(?,?,?,?,?,?)",
+            (data.get("opponents"), data.get("start_at"), data.get("map"), data.get("team_size"), data.get("rules"), data.get("server"))
+        )
+        await db.commit()
+        war_id = cur.lastrowid
+    await _schedule_cw_reminders(war_id, data.get("start_at"))
+    await state.clear()
+    await message.answer("✅ КВ создана. Откройте «Клановые войны (админ)» для управления.")
+
+@dp.message(F.text == "Клановые войны (админ)")
+async def cw_open_list(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id, opponents, start_at, status FROM clan_wars ORDER BY datetime(start_at) DESC")
+        rows = await cur.fetchall()
+    if not rows:
+        await message.answer("Список КВ пуст.")
+        return
+    await message.answer("Список КВ:", reply_markup=cw_list_admin_kb(rows))
+
+@dp.callback_query(F.data == "cw:list")
+async def cw_cb_list(call: CallbackQuery):
+    await cw_open_list(call.message)
+    await call.answer()
+
+@dp.callback_query(F.data == "cw:create")
+async def cw_cb_create(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    await call.message.answer("Создаём новую КВ.\n1/6. Введите противников (пример: BB vs CL):")
+    await state.set_state(CWCreate.waiting_opponents)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:open:"))
+async def cw_open(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, wid = call.data.split(":")
+    war_id = int(wid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT opponents, start_at, map, team_size, rules, server, status, winner FROM clan_wars WHERE id=?", (war_id,))
+        row = await cur.fetchone()
+    if not row:
+        await call.answer("КВ не найдена.", show_alert=True)
+        return
+    opponents, start_at, map_name, team_size, rules, server, status, winner = row
+    regs = await get_cw_participants(war_id)
+    text = _cw_info_text(opponents, start_at, map_name, team_size, rules, server, len(regs))
+    if status == "finished":
+        text += f"\n\n<b>Завершена.</b> Победитель: {winner or '-'}"
+    else:
+        if regs:
+            lines = ["", "Участники:"]
+            for uid, nick, uname in regs:
+                tag = nick or (f"@{uname}" if uname else str(uid))
+                lines.append(f"• {tag} — удалить: /cw_kick {war_id} {uid}")
+            text += "\n".join(lines)
+    try:
+        await call.message.edit_text(text, reply_markup=cw_admin_kb(war_id))
+    except Exception:
+        try:
+            await call.message.answer(text, reply_markup=cw_admin_kb(war_id))
+        except Exception:
+            pass
+    await call.answer()
+
+@dp.message(Command("cw_kick"))
+async def cw_kick_cmd(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Недостаточно прав.")
+        return
+    parts = (message.text or "").strip().split()
+    if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
+        await message.answer("Использование: /cw_kick <war_id> <user_id>")
+        return
+    war_id = int(parts[1]); user_id = int(parts[2])
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM clan_war_regs WHERE war_id=? AND user_id=?", (war_id, user_id))
+        await db.commit()
+    await message.answer("Игрок удалён из списка КВ.")
+
+@dp.callback_query(F.data.startswith("cw:finish:"))
+async def cw_finish(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    war_id = int(call.data.split(":")[2])
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🍇 Победили Blackberry", callback_data=f"cw:win:{war_id}:bb")
+    kb.button(text="🛡️ Победил противник", callback_data=f"cw:win:{war_id}:opp")
+    kb.button(text="⬅️ Назад", callback_data=f"cw:open:{war_id}")
+    await call.message.answer("Кто победил?", reply_markup=kb.adjust(1).as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:win:"))
+async def cw_set_winner(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    _, _, wid, who = call.data.split(":")
+    war_id = int(wid)
+    winner = "Blackberry" if who == "bb" else "Opponent"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE clan_wars SET status='finished', winner=? WHERE id=?", (winner, war_id))
+        cur = await db.execute("SELECT user_id FROM clan_war_regs WHERE war_id=?", (war_id,))
+        users = [r[0] for r in await cur.fetchall()]
+        for uid in users:
+            if winner == "Blackberry":
+                await db.execute("UPDATE users SET cw_wins = COALESCE(cw_wins,0)+1 WHERE user_id=?", (uid,))
+            else:
+                await db.execute("UPDATE users SET cw_losses = COALESCE(cw_losses,0)+1 WHERE user_id=?", (uid,))
+        await db.commit()
+    try:
+        for uid in users:
+            try:
+                await bot.send_message(uid, f"КВ завершена. Результат: {winner}. Спасибо за участие!")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    await call.answer("Результат сохранён.")
+    await cw_open(call)
+
+@dp.callback_query(F.data == "menu:cw")
+async def menu_cw(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True); return
+    row = await get_active_cw()
+    if not row:
+        await call.message.answer("Активных КВ нет.")
+        await call.answer(); return
+    war_id, opponents, start_at, map_name, team_size, rules, server = row
+    regs = await get_cw_participants(war_id)
+    text = _cw_info_text(opponents, start_at, map_name, team_size, rules, server, len(regs))
+    already = any(r[0]==uid for r in regs)
+    if already:
+        text += "\n\nВы уже зарегистрированы."
+        kb=None
+    elif len(regs) >= int(team_size):
+        text += "\n\nРегистрация недоступна — места заняты."
+        kb=None
+    else:
+        text += "\n\nВы подтверждаете регистрацию на КВ? Возможности отмены нет."
+        kb = cw_registration_kb(war_id)
+    try:
+        await call.message.answer(text, reply_markup=kb)
+    except Exception:
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:confirm:"))
+async def cw_confirm(call: CallbackQuery):
+    uid = call.from_user.id
+    war_id = int(call.data.split(":")[2])
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT team_size, status FROM clan_wars WHERE id=?", (war_id,))
+        row = await cur.fetchone()
+        if not row or row[1] != "planned":
+            await call.answer("Регистрация недоступна.", show_alert=True); return
+        team_size = int(row[0])
+        cur = await db.execute("SELECT COUNT(*) FROM clan_war_regs WHERE war_id=?", (war_id,))
+        cnt = (await cur.fetchone())[0]
+        if cnt >= team_size:
+            await call.answer("Свободных слотов нет.", show_alert=True); return
+        try:
+            await db.execute("INSERT OR IGNORE INTO clan_war_regs(war_id, user_id, registered_at) VALUES(?,?,?)", (war_id, uid, datetime.utcnow().isoformat()))
+            await db.commit()
+        except Exception:
+            pass
+    await call.answer("Вы зарегистрированы!")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+@dp.callback_query(F.data == "cw:cancel")
+async def cw_cancel(call: CallbackQuery):
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer("Отменено.")
+
+async def send_cw_reminder(war_id: int, hours_before: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT opponents, start_at FROM clan_wars WHERE id=?", (war_id,))
+        row = await cur.fetchone()
+        if not row: 
+            return
+        opponents, start_at = row
+        cur = await db.execute("SELECT user_id FROM clan_war_regs WHERE war_id=?", (war_id,))
+        users = [r[0] for r in await cur.fetchall()]
+    when = datetime.fromisoformat(start_at).strftime("%d.%m.%y %H:%M")
+    for uid in users:
+        try:
+            await bot.send_message(uid, f"Напоминание: КВ {opponents} через {hours_before} ч. Время начала: {when}")
+        except Exception:
+            pass
+
+# Обогащаем профиль статистикой КВ
+_old_format_profile = format_profile
+def format_profile(user: dict, title: str = "Профиль игрока", history: list | None = None) -> str:
+    text = _old_format_profile(user, title=title, history=history)
+    wins = user.get("cw_wins") if isinstance(user, dict) else None
+    losses = user.get("cw_losses") if isinstance(user, dict) else None
+    if wins is None or losses is None:
+        try:
+            uid = int(user.get("user_id"))
+        except Exception:
+            uid = None
+        if uid:
+            async def _fetch(uid_):
+                async with aiosqlite.connect(DB_PATH) as db:
+                    cur = await db.execute("SELECT cw_wins, cw_losses FROM users WHERE user_id=?", (uid_,))
+                    return await cur.fetchone()
+            import asyncio as _asyncio
+            try:
+                r = _asyncio.get_event_loop().run_until_complete(_fetch(uid))
+                if r:
+                    wins, losses = r
+            except Exception:
+                pass
+    text += f"\n\n<b>Статистика КВ</b>: Побед — {wins or 0}, Поражений — {losses or 0}"
+    return text
+
+@dp.callback_query(F.data == "menu:cw_list")
+async def menu_cw_list(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True); return
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id, opponents, start_at FROM clan_wars WHERE status='planned' ORDER BY datetime(start_at) ASC LIMIT 20")
+        rows = await cur.fetchall()
+    if not rows:
+        await call.message.answer("Нет активных КВ.")
+        await call.answer(); return
+    kb = InlineKeyboardBuilder()
+    for wid, opponents, start_at in rows:
+        when = datetime.fromisoformat(start_at).strftime("%d.%m.%y %H:%M")
+        kb.button(text=f"{opponents} • {when}", callback_data=f"cw:open_pub:{wid}")
+    await call.message.answer("Активные КВ:", reply_markup=kb.adjust(1).as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data == "menu:cw_history")
+async def menu_cw_history(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True); return
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id, opponents, start_at, winner FROM clan_wars WHERE status='finished' ORDER BY datetime(start_at) DESC LIMIT 10")
+        rows = await cur.fetchall()
+    if not rows:
+        await call.message.answer("История пуста.")
+        await call.answer(); return
+    lines = ["<b>История КВ (последние 10)</b>"]
+    for wid, opponents, start_at, winner in rows:
+        when = datetime.fromisoformat(start_at).strftime("%d.%m.%y %H:%M")
+        lines.append(f"• {when} — {opponents} → Победитель: {winner or '-'}")
+    await call.message.answer("\n".join(lines))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:open_pub:"))
+async def cw_open_pub(call: CallbackQuery):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True); return
+    war_id = int(call.data.split(":")[2])
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT opponents, start_at, map, team_size, rules, server, status FROM clan_wars WHERE id=?", (war_id,))
+        row = await cur.fetchone()
+    if not row:
+        await call.answer("КВ не найдена.", show_alert=True); return
+    opponents, start_at, map_name, team_size, rules, server, status = row
+    regs = await get_cw_participants(war_id)
+    text = _cw_info_text(opponents, start_at, map_name, team_size, rules, server, len(regs))
+    if status != "planned":
+        text += "\n\nРегистрация недоступна."
+        kb = None
+    else:
+        already = any(r[0]==uid for r in regs)
+        if already:
+            text += "\n\nВы уже зарегистрированы."
+            kb=None
+        elif len(regs) >= int(team_size):
+            text += "\n\nРегистрация недоступна — места заняты."
+            kb=None
+        else:
+            text += "\n\nВы подтверждаете регистрацию на КВ? Возможности отмены нет."
+            kb = cw_registration_kb(war_id)
+    try:
+        await call.message.answer(text, reply_markup=kb)
+    except Exception:
+        pass
+    await call.answer()
+
+# ======================= /Clan Wars (КВ) =======================
