@@ -2359,9 +2359,6 @@ def clan_menu_kb(cw_button_text: Optional[str] = None) -> InlineKeyboardMarkup:
     if cw_button_text:
         kb.button(text=cw_button_text, callback_data="menu:cw")
         kb.row()
-    kb.button(text="⚔️ Список КВ", callback_data="menu:cw_list")
-    kb.button(text="📜 История КВ", callback_data="menu:cw_history")
-    kb.row()
     kb.button(text="Изменить статус посещения", callback_data="menu:change_attendance")
     kb.row()
     kb.button(text="Полезные контакты", callback_data="menu:contacts")
@@ -3169,78 +3166,4 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
                 pass
     text += f"\n\n<b>Статистика КВ</b>: Побед — {wins or 0}, Поражений — {losses or 0}"
     return text
-
-@dp.callback_query(F.data == "menu:cw_list")
-async def menu_cw_list(call: CallbackQuery):
-    uid = call.from_user.id
-    user = await get_user(uid)
-    if not _is_joined_status(user):
-        await call.answer("Только для вступивших игроков.", show_alert=True); return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT id, opponents, start_at FROM clan_wars WHERE status='planned' ORDER BY datetime(start_at) ASC LIMIT 20")
-        rows = await cur.fetchall()
-    if not rows:
-        await call.message.answer("Нет активных КВ.")
-        await call.answer(); return
-    kb = InlineKeyboardBuilder()
-    for wid, opponents, start_at in rows:
-        when = datetime.fromisoformat(start_at).strftime("%d.%m.%y %H:%M")
-        kb.button(text=f"{opponents} • {when}", callback_data=f"cw:open_pub:{wid}")
-    await call.message.answer("Активные КВ:", reply_markup=kb.adjust(1).as_markup())
-    await call.answer()
-
-@dp.callback_query(F.data == "menu:cw_history")
-async def menu_cw_history(call: CallbackQuery):
-    uid = call.from_user.id
-    user = await get_user(uid)
-    if not _is_joined_status(user):
-        await call.answer("Только для вступивших игроков.", show_alert=True); return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT id, opponents, start_at, winner FROM clan_wars WHERE status='finished' ORDER BY datetime(start_at) DESC LIMIT 10")
-        rows = await cur.fetchall()
-    if not rows:
-        await call.message.answer("История пуста.")
-        await call.answer(); return
-    lines = ["<b>История КВ (последние 10)</b>"]
-    for wid, opponents, start_at, winner in rows:
-        when = datetime.fromisoformat(start_at).strftime("%d.%m.%y %H:%M")
-        lines.append(f"• {when} — {opponents} → Победитель: {winner or '-'}")
-    await call.message.answer("\n".join(lines))
-    await call.answer()
-
-@dp.callback_query(F.data.startswith("cw:open_pub:"))
-async def cw_open_pub(call: CallbackQuery):
-    uid = call.from_user.id
-    user = await get_user(uid)
-    if not _is_joined_status(user):
-        await call.answer("Только для вступивших игроков.", show_alert=True); return
-    war_id = int(call.data.split(":")[2])
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT opponents, start_at, map, team_size, rules, server, status FROM clan_wars WHERE id=?", (war_id,))
-        row = await cur.fetchone()
-    if not row:
-        await call.answer("КВ не найдена.", show_alert=True); return
-    opponents, start_at, map_name, team_size, rules, server, status = row
-    regs = await get_cw_participants(war_id)
-    text = _cw_info_text(opponents, start_at, map_name, team_size, rules, server, len(regs))
-    if status != "planned":
-        text += "\n\nРегистрация недоступна."
-        kb = None
-    else:
-        already = any(r[0]==uid for r in regs)
-        if already:
-            text += "\n\nВы уже зарегистрированы."
-            kb=None
-        elif len(regs) >= int(team_size):
-            text += "\n\nРегистрация недоступна — места заняты."
-            kb=None
-        else:
-            text += "\n\nВы подтверждаете регистрацию на КВ? Возможности отмены нет."
-            kb = cw_registration_kb(war_id)
-    try:
-        await call.message.answer(text, reply_markup=kb)
-    except Exception:
-        pass
-    await call.answer()
-
 # ======================= /Clan Wars (КВ) =======================
