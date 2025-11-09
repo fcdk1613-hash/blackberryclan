@@ -544,6 +544,17 @@ def display_name(user: dict | None, fallback_fullname: str | None = None) -> str
         uname = None
     return f"{nick} (@{uname})" if uname else nick
 
+
+async def CW_delete_war(war_id: int) -> bool:
+    # explicit delete of registrations to avoid SQLite FK pragma surprises
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("DELETE FROM cw_registrations WHERE war_id=?", (war_id,))
+            await db.execute("DELETE FROM cw_wars WHERE id=?", (war_id,))
+            await db.commit()
+            return True
+        except Exception:
+            return False
 # ======= CLAN WAR (CW) HELPERS =======
 async def CW_create_war(opponents: str, starts_at_iso: str, map_: str, team_size: int, rules: str, server: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2901,6 +2912,7 @@ async def CW_admin_panel(call: CallbackQuery):
         kb.button(text=f"❌ Удалить {uid}", callback_data=f"cw:del:{war_id}:{uid}")
     kb.row()
     kb.button(text="🏁 Завершить КВ", callback_data=f"cw:finish:{war_id}")
+    kb.button(text="🗑 Удалить КВ", callback_data=f"cw:delete:{war_id}")
     await call.message.answer(info, reply_markup=kb.adjust(1).as_markup())
     await call.answer()
 
@@ -2912,6 +2924,14 @@ async def CW_admin_remove_player(call: CallbackQuery):
     await CW_unregister(int(war_id_s), int(uid_s))
     await call.answer("Удалён. Регистрация снова доступна при наличии мест.")
 
+
+@dp.callback_query(F.data.startswith("cw:delete:"))
+async def CW_admin_delete_war(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True); return
+    _, _, war_id_s = call.data.split(":")
+    ok = await CW_delete_war(int(war_id_s))
+    await call.answer("КВ удалено." if ok else "Не удалось удалить.", show_alert=not ok)
 @dp.callback_query(F.data.startswith("cw:finish:"))
 async def CW_admin_finish_ask(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -2940,10 +2960,12 @@ async def CW_cmd_stats(message: Message):
     if not rows:
         await message.answer("Прошедших КВ пока нет."); return
     lines = ["<b>Статистика КВ — прошедшие</b>"]
+    kb = InlineKeyboardBuilder()
     for w in rows:
         res = w.get("winner") or "—"
         lines.append(f"• {w['starts_at']} — {w['opponents']} — результат: {res}")
-    await message.answer("\n".join(lines))
+        kb.button(text=f"🗑 Удалить {w['id']}", callback_data=f"cw:delete:{w['id']}")
+    await message.answer("\n".join(lines), reply_markup=kb.adjust(1).as_markup())
 # ======= Admin Menu (/amenu) & Find Player flow =======
 class FindPlayerState(StatesGroup):
     waiting_query = State()
