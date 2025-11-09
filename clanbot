@@ -2903,8 +2903,8 @@ async def CW_admin_panel(call: CallbackQuery):
         names.append(display_name(u, fallback_fullname=str(uid)))
     info = (
         f"⚔<b>{w['opponents']}</b>\n"
-        f"⏰Время: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
-        f"⚖Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
+        f"⏰Время: {w['starts_at']}\n🗺Карта: {w.get('map') or '-'}\n👨‍👦‍👦Команда: {w['team_size']}\n"
+        f"⚖Правила: {w.get('rules') or '-'}\n🔌Сервер: {w.get('server') or '-'}\n\n"
         f"☠<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
     )
     kb = InlineKeyboardBuilder()
