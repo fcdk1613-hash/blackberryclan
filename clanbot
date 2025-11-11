@@ -515,7 +515,7 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
             lines.append(f"{k}: {v}")
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
-    lines.append(f"КВ: победы/поражения — ✅{cw_wins}/❌{cw_losses}")
+    lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
 # История турниров — история передаётся в аргументе `history`
     if history:
         lines.append("\n<b>История турниров</b>")
@@ -2215,6 +2215,30 @@ async def on_new_user_delete(call: CallbackQuery):
     await call.answer("Удалён.")
 
 
+async def check_recruit_promotion_candidates():
+    from datetime import datetime, timedelta
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    threshold = (today - timedelta(days=14)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, nickname, tg_link, joined_at FROM users "
+            "WHERE status = ? AND faction = ? AND joined_at IS NOT NULL AND date(joined_at) <= date(?)",
+            ("joined", "Fresh Meat", threshold)
+        )
+        rows = await cur.fetchall()
+    for uid, nickname, tg_link, joined_at in rows:
+        user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link, "joined_at": joined_at }
+        text = f"Игрок {display_name(user)} в клане 14 дней и может быть переведен в основной состав."
+        try:
+            await notify_staff(text)
+        except Exception:
+            for rid in reviewer_ids():
+                try:
+                    await bot.send_message(rid, text)
+                except Exception:
+                    pass
+
 async def check_birthdays_today():
     from datetime import datetime
     msk = ZoneInfo("Europe/Moscow")
@@ -2501,10 +2525,10 @@ async def CW_menu_view(call: CallbackQuery):
     regs = await CW_registrations(war_id)
     free = max(0, int(w['team_size']) - len(regs))
     info = (
-        f"⚔<b>{w['opponents']}</b>\n"
-        f"⏰Когда: {w['starts_at']}\n🗺Карта: {w.get('map') or '-'}\n👨‍👦‍👦Команда: {w['team_size']}\n"
-        f"⚖Правила: {w.get('rules') or '-'}\n🔌Сервер: {w.get('server') or '-'}\n"
-        f"☠Записались: {len(regs)} / {w['team_size']} (свободно: {free})"
+        f"<b>{w['opponents']}</b>\n"
+        f"Когда: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n"
+        f"Записались: {len(regs)} / {w['team_size']} (свободно: {free})"
     )
     kb = InlineKeyboardBuilder()
     if call.from_user.id not in regs and free > 0:
@@ -2765,7 +2789,7 @@ class CWCreateState(StatesGroup):
 
 @dp.message(Command("cw_create"))
 async def CW_cmd_create(message: Message, state: FSMContext):
-    if message.from_user.id not in (ADMIN_IDS):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы."); return
     await message.answer("Введите противников (пример: BB vs CL):")
     await state.set_state(CWCreateState.opponents)
@@ -2861,7 +2885,7 @@ async def CW_cmd_admin(message: Message):
         await message.answer("Активных КВ нет. Используйте /cw_create."); return
     kb = InlineKeyboardBuilder()
     for w in wars:
-        kb.button(text=f"⚔{w['opponents']} — {w['starts_at']}", callback_data=f"cw:panel:{w['id']}")
+        kb.button(text=f"{w['opponents']} — {w['starts_at']}", callback_data=f"cw:panel:{w['id']}")
     await message.answer("Выберите КВ:", reply_markup=kb.adjust(1).as_markup())
 
 @dp.callback_query(F.data.startswith("cw:panel:"))
@@ -2878,10 +2902,10 @@ async def CW_admin_panel(call: CallbackQuery):
         u = await get_user(uid)
         names.append(display_name(u, fallback_fullname=str(uid)))
     info = (
-        f"⚔<b>{w['opponents']}</b>\n"
-        f"⏰Время: {w['starts_at']}\n🗺Карта: {w.get('map') or '-'}\n👨‍👦‍👦Команда: {w['team_size']}\n"
-        f"⚖Правила: {w.get('rules') or '-'}\n🔌Сервер: {w.get('server') or '-'}\n\n"
-        f"☠<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
+        f"<b>{w['opponents']}</b>\n"
+        f"Время: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
+        f"<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
     )
     kb = InlineKeyboardBuilder()
     for uid in regs:
