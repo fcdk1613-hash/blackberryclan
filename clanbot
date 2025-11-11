@@ -2215,30 +2215,6 @@ async def on_new_user_delete(call: CallbackQuery):
     await call.answer("Удалён.")
 
 
-async def check_recruit_promotion_candidates():
-    from datetime import datetime, timedelta
-    msk = ZoneInfo("Europe/Moscow")
-    today = datetime.now(msk).date()
-    threshold = (today - timedelta(days=14)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT user_id, nickname, tg_link, joined_at FROM users "
-            "WHERE status = ? AND faction = ? AND joined_at IS NOT NULL AND date(joined_at) <= date(?)",
-            ("joined", "Fresh Meat", threshold)
-        )
-        rows = await cur.fetchall()
-    for uid, nickname, tg_link, joined_at in rows:
-        user = { "user_id": uid, "nickname": nickname, "tg_link": tg_link, "joined_at": joined_at }
-        text = f"Игрок {display_name(user)} в клане 14 дней и может быть переведен в основной состав."
-        try:
-            await notify_staff(text)
-        except Exception:
-            for rid in reviewer_ids():
-                try:
-                    await bot.send_message(rid, text)
-                except Exception:
-                    pass
-
 async def check_birthdays_today():
     from datetime import datetime
     msk = ZoneInfo("Europe/Moscow")
