@@ -2741,7 +2741,7 @@ async def main():
         
     # Daily checks: recruits 14d & birthdays (MSK)
 # Daily checks: recruits 14d & birthdays (MSK)# 
-        scheduler.add_job(check_recruit_promotion_candidates, CronTrigger(hour=10, minute=0, timezone=ZoneInfo("Europe/Moscow")))
+        # scheduler.add_job(check_recruit_promotion_candidates, CronTrigger(hour=10, minute=0, timezone=ZoneInfo("Europe/Moscow")))
         scheduler.add_job(check_birthdays_today, CronTrigger(hour=9, minute=0, timezone=ZoneInfo("Europe/Moscow")))
         scheduler.start()
     except Exception:
