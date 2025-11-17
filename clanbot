@@ -2709,7 +2709,7 @@ async def check_reserve_expired():
     today = (datetime.now(tz).date() if tz else datetime.utcnow().date()).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT user_id, nickname, tg_link FROM users WHERE faction='Резерв' AND reserve_until IS NOT NULL AND date(reserve_until) <= date(?)",
+            "SELECT user_id, nickname, tg_link FROM users WHERE faction='Резерв' AND reserve_until IS NOT NULL AND date(reserve_until) = date(?)",
             (today,)
         )
         rows = await cur.fetchall()
