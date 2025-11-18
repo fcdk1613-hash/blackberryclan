@@ -344,6 +344,10 @@ class ReserveUntilState(StatesGroup):
 class TrainingReason(StatesGroup):
     waiting_reason = State()
 
+class ReserveRequestState(StatesGroup):
+    waiting_reason = State()
+    waiting_date = State()
+
 
 
 
@@ -2505,6 +2509,8 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="Клановые войны", callback_data="menu:cw")
     kb.row()
+    kb.button(text="Перейти в резерв", callback_data="menu:reserve")
+    kb.row()
     kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
     return kb.adjust(1).as_markup()
@@ -2667,6 +2673,60 @@ async def on_menu_change_attendance(call: CallbackQuery):
         await call.message.answer(text, reply_markup=kb)
     except Exception:
         pass
+
+@dp.callback_query(F.data == "menu:reserve")
+async def on_menu_reserve(call: CallbackQuery, state: FSMContext):
+    uid = call.from_user.id
+    user = await get_user(uid)
+    if not _is_joined_status(user):
+        await call.answer("Только для вступивших игроков.", show_alert=True)
+        return
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    await call.message.answer("Введите причину перехода в резерв:")
+    await state.update_data(reserve_request_user_id=uid)
+    await state.set_state(ReserveRequestState.waiting_reason)
+
+@dp.message(ReserveRequestState.waiting_reason)
+async def on_reserve_request_reason(message: Message, state: FSMContext):
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.answer("Пожалуйста, укажите причину перехода в резерв текстом.")
+        return
+    await state.update_data(reserve_request_reason=reason)
+    await message.answer("Введите приблизительную дату выхода из резерва (например, 15.03.2025 или "март 2025"):")
+    await state.set_state(ReserveRequestState.waiting_date)
+
+@dp.message(ReserveRequestState.waiting_date)
+async def on_reserve_request_date(message: Message, state: FSMContext):
+    date_text = (message.text or "").strip()
+    if not date_text:
+        await message.answer("Пожалуйста, укажите приблизительную дату выхода из резерва.")
+        return
+    data = await state.get_data()
+    reason = data.get("reserve_request_reason") or "—"
+    user_id = data.get("reserve_request_user_id") or message.from_user.id
+    user = await get_user(user_id)
+    try:
+        disp = display_name(user) if user else None
+    except Exception:
+        disp = None
+    if not disp:
+        disp = message.from_user.full_name or (("@" + message.from_user.username) if message.from_user.username else str(user_id))
+    text = f"Игрок "{disp}" хочет перейти в резерв. Причина: "{reason}" Приблизительная дата выхода: "{date_text}""
+    try:
+        await notify_staff(text)
+    except Exception:
+        for rid in reviewer_ids():
+            try:
+                await bot.send_message(rid, text)
+            except Exception:
+                pass
+    await message.answer("Заявка отправлена в HR. Ожидайте уведомления.")
+    await state.clear()
+
 
 @dp.message(ReserveUntilState.waiting_date)
 async def on_reserve_until_input(message: Message, state: FSMContext):
