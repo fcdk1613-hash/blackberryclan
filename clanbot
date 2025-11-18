@@ -2715,7 +2715,7 @@ async def on_reserve_request_date(message: Message, state: FSMContext):
         disp = None
     if not disp:
         disp = message.from_user.full_name or (("@" + message.from_user.username) if message.from_user.username else str(user_id))
-    text = f"Игрок "{disp}" хочет перейти в резерв. Причина: "{reason}" Приблизительная дата выхода: "{date_text}""
+    text = f'Игрок "{disp}" хочет перейти в резерв. Причина: "{reason}" Приблизительная дата выхода: "{date_text}"'
     try:
         await notify_staff(text)
     except Exception:
