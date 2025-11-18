@@ -1861,7 +1861,7 @@ async def check_training_inactive_3days():
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """
-            SELECT u.user_id FROM users u
+            SELECT u.user_id, u.nickname, u.tg_link FROM users u
             WHERE u.status = ?
               AND (u.faction IS NULL OR u.faction != 'Резерв')
               AND u.user_id NOT IN (
@@ -1871,17 +1871,23 @@ async def check_training_inactive_3days():
             """,
             ("joined", days[0], days[1], days[2])
         )
-        ids = [r[0] for r in await cur.fetchall()]
-    if not ids:
+        rows = await cur.fetchall()
+    if not rows:
         return
-    for uid in ids:
+
+    lines: list[str] = []
+    for uid, nickname, tg_link in rows:
+        user = {"user_id": uid, "nickname": nickname, "tg_link": tg_link}
         try:
-            user = await get_user(uid)
+            disp = display_name(user)
         except Exception:
-            user = None
-        nickname = user.get("nickname") if user else None
-        headline = f"Внимание! Игрок {nickname} (ID: {uid}) не выходит на связь в течение 3 дней" if nickname else f"Внимание! Игрок ID: {uid} не выходит на связь в течение 3 дней"
-        await notify_staff(headline)
+            disp = None
+        if not disp:
+            disp = nickname or tg_link or str(uid)
+        lines.append(f'Игрок "{disp}" не выходит на связь в течение 3-х дней')
+
+    text = "\n".join(lines)
+    await notify_staff(text)
 
 async def save_training_response(user_id: int, date_str: str, response: str, reason: str | None):
     now_iso = datetime.utcnow().isoformat()
