@@ -2696,7 +2696,7 @@ async def on_reserve_request_reason(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, укажите причину перехода в резерв текстом.")
         return
     await state.update_data(reserve_request_reason=reason)
-    await message.answer("Введите приблизительную дату выхода из резерва (например, 15.03.2025 или "март 2025"):")
+    await message.answer('Введите приблизительную дату выхода из резерва (например, 15.03.2025 или "март 2025"):')
     await state.set_state(ReserveRequestState.waiting_date)
 
 @dp.message(ReserveRequestState.waiting_date)
