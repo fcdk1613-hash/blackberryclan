@@ -2548,8 +2548,8 @@ async def CW_menu_view(call: CallbackQuery):
     free = max(0, int(w['team_size']) - len(regs))
     info = (
         f"⚔<b>{w['opponents']}</b>\n"
-        f"⏰Когда: {format_cw_datetime(w['starts_at'])}\n🗺Карта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
-        f"📢Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n"
+        f"⏰Когда: {format_cw_datetime(w['starts_at'])}\n🗺Карта: {w.get('map') or '-'}\n☠Команда: {w['team_size']}\n"
+        f"📢Правила: {w.get('rules') or '-'}\n🔌Сервер: {w.get('server') or '-'}\n"
         f"📜Записались: {len(regs)} / {w['team_size']} (свободно: {free})"
     )
     kb = InlineKeyboardBuilder()
