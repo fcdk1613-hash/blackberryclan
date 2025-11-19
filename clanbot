@@ -2949,8 +2949,8 @@ async def CW_send_reminder_job(war_id: int, hours_before: int):
     if not regs:
         return
     text = (
-        f"Напоминание: КВ через {hours_before} ч.\n"
-        f"{w['opponents']}\nВремя: {format_cw_datetime(w['starts_at'])}\nКарта: {w.get('map') or '-'}\nСервер: {w.get('server') or '-'}"
+        f"<b>Внимание!</b> Открыта регистрация на КВ!\n"
+        f"⚔{w['opponents']}\n⏰Время: {format_cw_datetime(w['starts_at'])}\n🗺Карта: {w.get('map') or '-'}"
     )
     for uid in regs:
         try:
