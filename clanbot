@@ -455,6 +455,16 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
     return kb.adjust(1).as_markup()
 
 
+
+def format_cw_datetime(iso_str: str) -> str:
+    """Форматирование даты/времени КВ в вид ДД.ММ.ГГ ЧЧ:ММ."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%d.%m.%y %H:%M")
+    except Exception:
+        return iso_str
+
+
 def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for code, title in (("hq","Штаб"),("blackhole","Black Hole")):
@@ -2524,7 +2534,7 @@ async def CW_menu_list(call: CallbackQuery):
         return
     kb = InlineKeyboardBuilder()
     for w in wars:
-        kb.button(text=f"{w['opponents']} — {w['starts_at']}", callback_data=f"cw:view:{w['id']}")
+        kb.button(text=f"{w['opponents']} — {format_cw_datetime(w['starts_at'])}", callback_data=f"cw:view:{w['id']}")
     await call.message.answer("<b>Активные КВ</b>", reply_markup=kb.adjust(1).as_markup())
     await call.answer()
 
@@ -2538,7 +2548,7 @@ async def CW_menu_view(call: CallbackQuery):
     free = max(0, int(w['team_size']) - len(regs))
     info = (
         f"<b>{w['opponents']}</b>\n"
-        f"Когда: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Когда: {format_cw_datetime(w['starts_at'])}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
         f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n"
         f"Записались: {len(regs)} / {w['team_size']} (свободно: {free})"
     )
@@ -2925,6 +2935,12 @@ async def CW_create_finish(message: Message, state: FSMContext):
     except Exception:
         pass
 
+    # уведомляем всех игроков (кроме фракции «Резерв») о новом КВ
+    try:
+        await CW_notify_new_war_all_players(war_id)
+    except Exception:
+        pass
+
 async def CW_send_reminder_job(war_id: int, hours_before: int):
     w = await CW_get_war(war_id)
     if not w or w.get("status") != "scheduled":
@@ -2934,13 +2950,46 @@ async def CW_send_reminder_job(war_id: int, hours_before: int):
         return
     text = (
         f"Напоминание: КВ через {hours_before} ч.\n"
-        f"{w['opponents']}\nВремя: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nСервер: {w.get('server') or '-'}"
+        f"{w['opponents']}\nВремя: {format_cw_datetime(w['starts_at'])}\nКарта: {w.get('map') or '-'}\nСервер: {w.get('server') or '-'}"
     )
     for uid in regs:
         try:
             await bot.send_message(uid, text)
         except Exception:
             pass
+
+async def CW_notify_new_war_all_players(war_id: int):
+    """Рассылка информации о новом КВ всем игрокам, кроме фракции «Резерв»."""
+    w = await CW_get_war(war_id)
+    if not w or w.get("status") != "scheduled":
+        return
+    # выбираем всех игроков из базы
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT user_id, faction FROM users") as cur:
+            rows = await cur.fetchall()
+    if not rows:
+        return
+    starts_str = format_cw_datetime(w["starts_at"])
+    text = (
+        "Новое КВ!\n\n"
+        f"<b>{w['opponents']}</b>\n"
+        f"Когда: {starts_str}\n"
+        f"Карта: {w.get('map') or '-'}\n"
+        f"Команда: {w['team_size']}\n"
+        f"Правила: {w.get('rules') or '-'}\n"
+        f"Сервер: {w.get('server') or '-'}\n\n"
+        "Чтобы записаться, откройте меню бота /menu и выберите пункт «Клановые войны»."
+    )
+    for uid, faction in rows:
+        try:
+            if (faction or "").strip() == "Резерв":
+                continue
+            await bot.send_message(uid, text)
+        except Exception:
+            pass
+
+
+
 
 @dp.message(Command("cw_admin"))
 async def CW_cmd_admin(message: Message):
@@ -2951,7 +3000,7 @@ async def CW_cmd_admin(message: Message):
         await message.answer("Активных КВ нет. Используйте /cw_create."); return
     kb = InlineKeyboardBuilder()
     for w in wars:
-        kb.button(text=f"{w['opponents']} — {w['starts_at']}", callback_data=f"cw:panel:{w['id']}")
+        kb.button(text=f"{w['opponents']} — {format_cw_datetime(w['starts_at'])}", callback_data=f"cw:panel:{w['id']}")
     await message.answer("Выберите КВ:", reply_markup=kb.adjust(1).as_markup())
 
 @dp.callback_query(F.data.startswith("cw:panel:"))
@@ -2969,7 +3018,7 @@ async def CW_admin_panel(call: CallbackQuery):
         names.append(display_name(u, fallback_fullname=str(uid)))
     info = (
         f"<b>{w['opponents']}</b>\n"
-        f"Время: {w['starts_at']}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Время: {format_cw_datetime(w['starts_at'])}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
         f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
         f"<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
     )
@@ -3029,7 +3078,7 @@ async def CW_cmd_stats(message: Message):
     kb = InlineKeyboardBuilder()
     for w in rows:
         res = w.get("winner") or "—"
-        lines.append(f"• {w['starts_at']} — {w['opponents']} — результат: {res}")
+        lines.append(f"• {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: {res}")
         kb.button(text=f"🗑 Удалить {w['id']}", callback_data=f"cw:delete:{w['id']}")
     await message.answer("\n".join(lines), reply_markup=kb.adjust(1).as_markup())
 # ======= Admin Menu (/amenu) & Find Player flow =======
