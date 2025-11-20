@@ -141,6 +141,17 @@ CREATE TABLE IF NOT EXISTS cw_registrations (
     FOREIGN KEY (war_id) REFERENCES cw_wars(id) ON DELETE CASCADE
 );
 """
+CREATE_MOD_ACTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS mod_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id INTEGER NOT NULL,
+    actor_role TEXT,
+    action TEXT NOT NULL,
+    target_id INTEGER,
+    extra TEXT,
+    created_at TEXT NOT NULL
+);
+"""
 # Idempotent per-user CW stats
 CW_ALTERS_USERS = [
     "ALTER TABLE users ADD COLUMN cw_wins INTEGER DEFAULT 0",
@@ -215,6 +226,7 @@ async def init_db():
         await db.execute(CREATE_REMOVE_TABLE_SQL)
         await db.execute(CREATE_CW_WARS_SQL)
         await db.execute(CREATE_CW_REGS_SQL)
+        await db.execute(CREATE_MOD_ACTIONS_SQL)
         # Migrations
         for alter in [
             "ALTER TABLE users ADD COLUMN applied_at TEXT",
@@ -718,6 +730,28 @@ async def create_invite_link() -> Optional[ChatInviteLink]:
     except Exception as e:
         logging.exception("Cannot create invite link: %r", e)
         return None
+async def log_mod_action(actor_id: int, action: str, target_id: int | None = None, extra: str | None = None) -> None:
+    """
+    Логирование действий модераторов/администраторов в таблицу mod_actions.
+    action — краткое описание действия (на русском).
+    """
+    try:
+        if actor_id in ADMIN_IDS:
+            role = "admin"
+        elif actor_id in MODERATOR_IDS:
+            role = "moderator"
+        else:
+            role = "user"
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO mod_actions(actor_id, actor_role, action, target_id, extra, created_at) VALUES (?,?,?,?,?,?)",
+                (actor_id, role, action, target_id, (extra or ""), datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+    except Exception as e:
+        logging.warning("Failed to log mod action: %r", e)
+
+
 
 # ======= Removal checklist (manual for items 1 and 3) =======
 async def ensure_removal_record(user_id: int):
@@ -1177,6 +1211,7 @@ async def on_edit_value(message: Message, state: FSMContext):
                     f"Игрок ID: <code>{target_id}</code>\n"
                     f"Поле: {field_ru} — обновлено.")
         await send_to_moderation(log_text)
+        await log_mod_action(message.from_user.id, "Изменение профиля игрока", target_id=target_id, extra=field_ru)
     except Exception:
         pass
 
@@ -1304,6 +1339,7 @@ async def on_approve(call: CallbackQuery):
         pass
     await call.answer("Одобрено ✅")
     await notify_review_outcome(target_id, "approved")
+    await log_mod_action(call.from_user.id, "Одобрена заявка", target_id=target_id)
     # Дополнительно: инструкции по тэгу и тренировочным серверам
     await bot.send_message(
         target_id,
@@ -1347,6 +1383,7 @@ async def on_reject(call: CallbackQuery):
         pass
     await call.answer("Отклонено ❌")
     await notify_review_outcome(target_id, "rejected")
+    await log_mod_action(call.from_user.id, "Отклонена заявка", target_id=target_id)
 
 # ======= Profile & Join Announce =======
 @dp.message(or_f(F.text == "/profile", F.text == "profile"))
@@ -1456,6 +1493,7 @@ async def get_stats(start: Optional[datetime], end: Optional[datetime]) -> str:
     params_applied: list = []
     params_approved: list = []
     params_joined: list = []
+    params_deleted: list = []
     def range_cond(col: str, params_list: list):
         c = []
         if start:
@@ -1469,6 +1507,7 @@ async def get_stats(start: Optional[datetime], end: Optional[datetime]) -> str:
     cond_applied = range_cond("applied_at", params_applied)
     cond_approved = range_cond("approved_at", params_approved)
     cond_joined = range_cond("joined_at", params_joined)
+    cond_deleted = range_cond("created_at", params_deleted)
     async with aiosqlite.connect(DB_PATH) as db:
         new_cnt = (await (await db.execute(f"SELECT COUNT(1) FROM users WHERE {cond_created}", params_created)).fetchone())[0]
         applied_cnt = (await (await db.execute(f"SELECT COUNT(1) FROM users WHERE applied_at IS NOT NULL AND {cond_applied}", params_applied)).fetchone())[0]
@@ -1479,6 +1518,8 @@ async def get_stats(start: Optional[datetime], end: Optional[datetime]) -> str:
         approved_not_joined = (await (await db.execute("SELECT COUNT(1) FROM users WHERE status=?", (Status.APPROVED.value,))).fetchone())[0]
         joined_total = (await (await db.execute("SELECT COUNT(1) FROM users WHERE status=?", (Status.JOINED.value,))).fetchone())[0]
         rejected_total = (await (await db.execute("SELECT COUNT(1) FROM users WHERE status=?", (Status.REJECTED.value,))).fetchone())[0]
+        deleted_cnt_row = await (await db.execute(f"SELECT COUNT(1) FROM mod_actions WHERE action = ? AND {cond_deleted}", ["Удаление игрока из базы", *params_deleted])).fetchone()
+        deleted_cnt = deleted_cnt_row[0] if deleted_cnt_row else 0
         avg_age_row = await (await db.execute(f"SELECT AVG(age) FROM users WHERE age IS NOT NULL AND joined_at IS NOT NULL AND {cond_joined}", params_joined)).fetchone()
         avg_age = round(avg_age_row[0], 1) if avg_age_row and avg_age_row[0] is not None else None
         tz_rows = await (await db.execute(
@@ -1493,6 +1534,7 @@ async def get_stats(start: Optional[datetime], end: Optional[datetime]) -> str:
         f"Заявок отправлено: <b>{applied_cnt}</b>",
         f"Одобрено: <b>{approved_cnt}</b>",
         f"Вступило: <b>{joined_cnt}</b>",
+        f"Удалено из базы: <b>{deleted_cnt}</b>",
         "",
         "<b>Воронка (всего):</b>",
         f"Всего пользователей: {total}",
@@ -1816,6 +1858,7 @@ async def on_remove_final(call: CallbackQuery):
         await db.execute("DELETE FROM removal_checklist WHERE user_id=?", (target_id,))
         await db.commit()
     await call.answer("Игрок полностью удалён из базы бота.", show_alert=True)
+    await log_mod_action(call.from_user.id, "Удаление игрока из базы", target_id=target_id)
     try:
         await call.message.edit_text("<b>Удаление завершено.</b> Игрок стерён из базы.")
     except Exception:
@@ -2924,6 +2967,7 @@ async def CW_create_finish(message: Message, state: FSMContext):
     )
     await state.clear()
     await message.answer(f"✅ КВ создано (ID: {war_id}). Откройте панель: /cw_admin")
+    await log_mod_action(message.from_user.id, "Создание КВ", target_id=war_id)
     # schedule reminders (24h, 12h, 6h)
     try:
         if CW_SCHEDULER:
@@ -3085,16 +3129,19 @@ async def CW_cmd_stats(message: Message):
 class FindPlayerState(StatesGroup):
     waiting_query = State()
 
-def admin_menu_kb() -> ReplyKeyboardMarkup:
+def admin_menu_kb(is_admin: bool) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text="Список игроков"), KeyboardButton(text="Статус посещения")],
+        [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Изменить контакты")],
+        [KeyboardButton(text="Изменить ивенты"), KeyboardButton(text="Найти игрока")],
+        [KeyboardButton(text="Создать КВ"), KeyboardButton(text="КВ (админ)")],
+        [KeyboardButton(text="Статистика КВ")],
+    ]
+    if is_admin:
+        keyboard.append([KeyboardButton(text="Действия модераторов")])
+    keyboard.append([KeyboardButton(text="Закрыть меню")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Список игроков"), KeyboardButton(text="Статус посещения")],
-            [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Изменить контакты")],
-            [KeyboardButton(text="Изменить ивенты"), KeyboardButton(text="Найти игрока")],
-            [KeyboardButton(text="Создать КВ"), KeyboardButton(text="КВ (админ)")],
-            [KeyboardButton(text="Статистика КВ")],
-            [KeyboardButton(text="Закрыть меню")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
         one_time_keyboard=False,
         input_field_placeholder="Выберите действие"
@@ -3106,11 +3153,57 @@ async def cmd_admin_menu(message: Message):
     if uid not in (ADMIN_IDS | MODERATOR_IDS):
         await message.answer("Только модераторы/администраторы.")
         return
-    await message.answer("Админ-меню:", reply_markup=admin_menu_kb())
+    await message.answer("Админ-меню:", reply_markup=admin_menu_kb(uid in ADMIN_IDS))
 
 @dp.message(F.text == "Закрыть меню")
 async def close_admin_menu(message: Message):
     await message.answer("Меню скрыто.", reply_markup=ReplyKeyboardRemove())
+
+
+@dp.message(F.text == "Действия модераторов")
+async def on_label_mod_actions(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Только администраторы.")
+        return
+    # Текущая дата по Москве
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT actor_id, actor_role, action, target_id, extra, created_at FROM mod_actions WHERE date(created_at)=date(?) ORDER BY datetime(created_at)",
+            (today,)
+        ) as cur:
+            today_rows = await cur.fetchall()
+        async with db.execute(
+            "SELECT actor_id, actor_role, action, target_id, extra, created_at FROM mod_actions WHERE date(created_at)<>date(?) ORDER BY datetime(created_at)",
+            (today,)
+        ) as cur:
+            other_rows = await cur.fetchall()
+
+    # Сообщение за текущую дату
+    if today_rows:
+        lines: list[str] = [f"<b>Действия модераторов за {today}</b>"]
+        for actor_id, actor_role, action, target_id, extra, created_at in today_rows:
+            try:
+                dt = datetime.fromisoformat(created_at)
+                time_str = dt.strftime("%H:%M")
+            except Exception:
+                time_str = created_at
+            target_part = f", цель: {target_id}" if target_id is not None else ""
+            extra_part = f" — {extra}" if extra else ""
+            lines.append(f"{time_str} — {action} (роль: {actor_role}, id: {actor_id}{target_part}){extra_part}")
+        await message.answer("\n".join(lines))
+    else:
+        await message.answer(f"За {today} действий модераторов не зафиксировано.")
+
+    # Остальные даты — CSV
+    if other_rows:
+        fname = f"bb_mod_actions_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        with open(fname, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["actor_id", "actor_role", "action", "target_id", "extra", "created_at"])
+            writer.writerows(other_rows)
+        await message.answer_document(FSInputFile(fname), caption="CSV со старыми действиями модераторов.")
 
 # --- Label -> command dispatchers ---
 @dp.message(F.text == "Создать КВ")
