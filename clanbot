@@ -2650,6 +2650,7 @@ async def cmd_set_events_text(message: Message):
         await message.answer(f"Текущий текст для «Предстоящие ивенты»:\n\n{current}\n\nОтправьте: <code>/ivent новый текст</code>")
         return
     await set_setting("events_text", arg[1].strip())
+    await log_mod_action(message.from_user.id, "Редактирование ивентов")
     await message.answer("Текст для «Предстоящие ивенты» обновлён.")
 
 @dp.message(Command("contacts"))
@@ -2663,6 +2664,7 @@ async def cmd_set_contacts_text(message: Message):
         await message.answer(f"Текущий текст для «Полезные контакты»:\n\n{current}\n\nОтправьте: <code>/contacts новый текст</code>")
         return
     await set_setting("contacts_text", arg[1].strip())
+    await log_mod_action(message.from_user.id, "Редактирование контактов")
     await message.answer("Текст для «Полезные контакты» обновлён.")
 @dp.message(Command("menu"), F.chat.type == "private")
 async def cmd_menu(message: Message):
@@ -3081,6 +3083,7 @@ async def CW_admin_remove_player(call: CallbackQuery):
         await call.answer("Недостаточно прав.", show_alert=True); return
     _, _, war_id_s, uid_s = call.data.split(":")
     await CW_unregister(int(war_id_s), int(uid_s))
+    await log_mod_action(call.from_user.id, "Редактирование КВ", target_id=int(uid_s), extra=f"Удалён из КВ {war_id_s}")
     await call.answer("Удалён. Регистрация снова доступна при наличии мест.")
 
 
@@ -3109,6 +3112,8 @@ async def CW_admin_finish_set(call: CallbackQuery):
     _, _, war_id_s, who = call.data.split(":")
     label = "Blackberry" if who == "bb" else "Противник"
     ok = await CW_finish(int(war_id_s), label)
+    if ok:
+        await log_mod_action(call.from_user.id, "Завершение КВ", target_id=int(war_id_s), extra=label)
     await call.answer("Завершено." if ok else "Не удалось завершить.")
 
 @dp.message(Command("cw_stats"))
@@ -3160,6 +3165,7 @@ async def close_admin_menu(message: Message):
     await message.answer("Меню скрыто.", reply_markup=ReplyKeyboardRemove())
 
 
+
 @dp.message(F.text == "Действия модераторов")
 async def on_label_mod_actions(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -3189,9 +3195,19 @@ async def on_label_mod_actions(message: Message):
                 time_str = dt.strftime("%H:%M")
             except Exception:
                 time_str = created_at
-            target_part = f", цель: {target_id}" if target_id is not None else ""
+            # Имена модератора и цели
+            actor_user = await get_user(actor_id)
+            actor_name = display_name(actor_user, fallback_fullname=f"ID {actor_id}")
+            target_name = None
+            if target_id is not None:
+                target_user = await get_user(target_id)
+                if target_user:
+                    target_name = display_name(target_user, fallback_fullname=f"ID {target_id}")
+                else:
+                    target_name = f"ID {target_id}"
+            target_part = f", цель: {target_name}" if target_name else ""
             extra_part = f" — {extra}" if extra else ""
-            lines.append(f"{time_str} — {action} (роль: {actor_role}, id: {actor_id}{target_part}){extra_part}")
+            lines.append(f"{time_str} — {action} (модератор: {actor_name}{target_part}){extra_part}")
         await message.answer("\n".join(lines))
     else:
         await message.answer(f"За {today} действий модераторов не зафиксировано.")
@@ -3204,6 +3220,7 @@ async def on_label_mod_actions(message: Message):
             writer.writerow(["actor_id", "actor_role", "action", "target_id", "extra", "created_at"])
             writer.writerows(other_rows)
         await message.answer_document(FSInputFile(fname), caption="CSV со старыми действиями модераторов.")
+
 
 # --- Label -> command dispatchers ---
 @dp.message(F.text == "Создать КВ")
