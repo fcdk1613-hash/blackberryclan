@@ -1535,6 +1535,7 @@ async def get_stats(start: Optional[datetime], end: Optional[datetime]) -> str:
         f"Одобрено: <b>{approved_cnt}</b>",
         f"Вступило: <b>{joined_cnt}</b>",
         f"Удалено из базы: <b>{deleted_cnt}</b>",
+        f"Покинуло клан: <b>{deleted_cnt}</b>",
         "",
         "<b>Воронка (всего):</b>",
         f"Всего пользователей: {total}",
