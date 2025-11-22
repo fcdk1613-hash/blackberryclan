@@ -307,11 +307,9 @@ async def cmd_settings(message: Message, state: FSMContext):
 @router.message(Command("calendar"))
 async def cmd_calendar(message: Message, state: FSMContext):
     """Показать календарь задач пользователя."""
-    # Если пользователь был в процессе создания задачи, очищаем информацию о задаче,
-    # чтобы календарь использовался только для просмотра.
-    data = await state.get_data()
-    if data.get("task_title") or data.get("selected_date") or data.get("selected_hour"):
-        await state.update_data(task_title=None, selected_date=None, selected_hour=None)
+    # Календарь всегда используется только для просмотра задач,
+    # поэтому полностью очищаем состояние возможного незавершённого сценария создания задачи.
+    await state.clear()
 
     now = datetime.now()
     markup = build_calendar(now.year, now.month)
