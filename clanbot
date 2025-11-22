@@ -70,7 +70,7 @@ def get_or_create_user(telegram_id: int, username: str | None, name: str | None)
     cur.execute("SELECT id, username, name FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cur.fetchone()
     if row:
-        # обновим только те поля, которые переданы (чтобы не затирать name = NULL и т.п.)
+        # обновим только те поля, которые переданы (чтобы не затирать существующие значения)
         fields = []
         params: list = []
         if username is not None:
@@ -212,10 +212,11 @@ def build_calendar(year: int, month: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def build_hours_keyboard() -> InlineKeyboardMarkup:
+def build_time_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура выбора часа. callback_data: time:H:HH"""
     keyboard: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
+
     for hour in range(0, 24):
         text = f"{hour:02d}"
         row.append(InlineKeyboardButton(text=text, callback_data=f"time:H:{text}"))
@@ -226,11 +227,7 @@ def build_hours_keyboard() -> InlineKeyboardMarkup:
         keyboard.append(row)
 
     keyboard.append(
-        [
-            InlineKeyboardButton(
-                text="⬅ Назад к дате", callback_data="time:BACK_DATE"
-            )
-        ]
+        [InlineKeyboardButton(text="⬅ Назад к дате", callback_data="time:BACK_DATE")]
     )
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -240,17 +237,10 @@ def build_minutes_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура выбора минут. callback_data: time:M:MM"""
     minutes = ["00", "15", "30", "45"]
     keyboard: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(text=m, callback_data=f"time:M:{m}")
-            for m in minutes
-        ]
+        [InlineKeyboardButton(text=m, callback_data=f"time:M:{m}") for m in minutes]
     ]
     keyboard.append(
-        [
-            InlineKeyboardButton(
-                text="⬅ Назад к часам", callback_data="time:BACK_HOUR"
-            )
-        ]
+        [InlineKeyboardButton(text="⬅ Назад к часам", callback_data="time:BACK_HOUR")]
     )
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -284,12 +274,8 @@ async def cmd_start(message: Message, state: FSMContext):
         await state.update_data(name=name, user_id=user_id)
         await state.set_state(Form.waiting_for_task_title)
         await message.answer(
-            f"С возвращением, {name}! ✨
-
-"
-            f"Какую задачу хочешь запланировать?
-
-"
+            f"С возвращением, {name}! ✨\n\n"
+            f"Какую задачу хочешь запланировать?\n\n"
             f"Просто напиши текст задачи."
         )
         return
@@ -297,10 +283,7 @@ async def cmd_start(message: Message, state: FSMContext):
     # Пользователь ещё не регистрировался — спрашиваем имя
     await state.set_state(Form.waiting_for_name)
     await message.answer(
-        "Привет! 👋
-
-Я бот-планировщик.
-Как тебя зовут?"
+        "Привет! 👋\n\nЯ бот-планировщик.\nКак тебя зовут?"
     )
 
 
@@ -316,9 +299,7 @@ async def cmd_settings(message: Message, state: FSMContext):
 
     markup = build_settings_keyboard()
     await message.answer(
-        "⚙️ Настройки аккаунта:
-
-Выбери действие:",
+        "⚙️ Настройки аккаунта:\n\nВыбери действие:",
         reply_markup=markup,
     )
 
@@ -335,9 +316,7 @@ async def cmd_calendar(message: Message, state: FSMContext):
     now = datetime.now()
     markup = build_calendar(now.year, now.month)
     await message.answer(
-        "📅 Календарь задач.
-
-Выбери дату, чтобы посмотреть задачи на этот день:",
+        "📅 Календарь задач.\n\nВыбери дату, чтобы посмотреть задачи на этот день:",
         reply_markup=markup,
     )
 
@@ -369,8 +348,7 @@ async def process_new_name(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"Имя успешно обновлено ✅
-Теперь я буду обращаться к тебе как к <b>{new_name}</b>."
+        f"Имя успешно обновлено ✅\nТеперь я буду обращаться к тебе как к <b>{new_name}</b>."
     )
 
 
@@ -392,12 +370,8 @@ async def process_name(message: Message, state: FSMContext):
     await state.set_state(Form.waiting_for_task_title)
 
     await message.answer(
-        f"Приятно познакомиться, {name}! ✨
-
-"
-        f"Какую задачу хочешь запланировать?
-
-"
+        f"Приятно познакомиться, {name}! ✨\n\n"
+        f"Какую задачу хочешь запланировать?\n\n"
         f"Просто напиши текст задачи."
     )
 
@@ -427,9 +401,7 @@ async def process_task_title(message: Message, state: FSMContext):
     markup = build_calendar(now.year, now.month)
 
     await message.answer(
-        f"Задача: <b>{title}</b>
-
-Выбери дату:",
+        f"Задача: <b>{title}</b>\n\nВыбери дату:",
         reply_markup=markup,
     )
 
@@ -509,14 +481,11 @@ async def calendar_callback(callback: CallbackQuery, state: FSMContext):
             await state.update_data(selected_date=date_str_db, selected_hour=None)
 
             text = (
-                f"Задача: <b>{title}</b>
-"
-                f"Дата: <b>{date_str_human}</b>
-
-"
+                f"Задача: <b>{title}</b>\n"
+                f"Дата: <b>{date_str_human}</b>\n\n"
                 f"Теперь выбери час:"
             )
-            markup = build_hours_keyboard()
+            markup = build_time_keyboard()
             await callback.message.edit_text(text, reply_markup=markup)
             await callback.answer()
             return
@@ -536,13 +505,10 @@ async def calendar_callback(callback: CallbackQuery, state: FSMContext):
                     task_title = task["title"]
                     task_id = task["id"]
                     lines.append(f"{idx}. <b>{time_str}</b> — {task_title} (ID: {task_id})")
-                text = "
-".join(lines)
+                text = "\n".join(lines)
             else:
                 text = (
-                    f"📅 На <b>{date_str_human}</b> задач пока нет.
-
-"
+                    f"📅 На <b>{date_str_human}</b> задач пока нет.\n\n"
                     f"Выбери другую дату:"
                 )
 
@@ -550,6 +516,9 @@ async def calendar_callback(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text(text, reply_markup=markup)
             await callback.answer()
             return
+
+    await callback.answer()
+
 
     await callback.answer()
 
@@ -592,12 +561,10 @@ async def time_callback(callback: CallbackQuery, state: FSMContext):
         text = callback.message.text or ""
         if "Выбери минуты:" in text:
             base_text = text.split("Выбери минуты:")[0].rstrip()
-            new_text = base_text + "
-
-Теперь выбери час:"
+            new_text = base_text + "\n\nТеперь выбери час:"
         else:
             new_text = text
-        markup = build_hours_keyboard()
+        markup = build_time_keyboard()
         await callback.message.edit_text(new_text, reply_markup=markup)
         await callback.answer()
         return
@@ -611,9 +578,7 @@ async def time_callback(callback: CallbackQuery, state: FSMContext):
             base_text = text.split("Теперь выбери час:")[0].rstrip()
         else:
             base_text = text
-        new_text = base_text + "
-
-Выбери минуты:"
+        new_text = base_text + "\n\nВыбери минуты:"
         markup = build_minutes_keyboard()
         await callback.message.edit_text(new_text, reply_markup=markup)
         await callback.answer("Час выбран ✅")
@@ -645,16 +610,10 @@ async def time_callback(callback: CallbackQuery, state: FSMContext):
         nice_date = datetime.strptime(date_str_db, "%Y-%m-%d").strftime("%d.%m.%Y")
 
         text = (
-            f"Задача сохранена ✅ (ID: {task_id})
-
-"
-            f"<b>{title}</b>
-"
-            f"Дата: <b>{nice_date}</b>
-"
-            f"Время: <b>{time_str}</b>
-
-"
+            f"Задача сохранена ✅ (ID: {task_id})\n\n"
+            f"<b>{title}</b>\n"
+            f"Дата: <b>{nice_date}</b>\n"
+            f"Время: <b>{time_str}</b>\n\n"
             f"Можешь написать новую задачу, чтобы запланировать ещё одну,"
             f" или использовать /start для нового сценария."
         )
