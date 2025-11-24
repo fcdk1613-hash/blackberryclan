@@ -102,6 +102,8 @@ CREATE TABLE IF NOT EXISTS users (
     applied_at TEXT,
     approved_at TEXT,
     joined_at TEXT
+    elo_rating INTEGER DEFAULT 1000,
+    elo_rank TEXT DEFAULT 'None'
 );
 """
 CREATE_USERS_ARCHIVE_SQL = """
@@ -180,6 +182,39 @@ FACTIONS = {
     "reserve": "Резерв",
 }
 
+# ======= ELO / RANKS =======
+
+RANKS = [
+    (0, 250, "⚪ None", "#a8a8a8"),
+    (251, 500, "🥉 Bronze I", "#cd7f32"),
+    (501, 750, "🥉 Bronze II", "#cd7f32"),
+    (751, 1000, "🥉 Bronze III", "#cd7f32"),
+    (1001, 1250, "🥈 Silver I", "#c0c0c0"),
+    (1251, 1500, "🥈 Silver II", "#c0c0c0"),
+    (1501, 1750, "🥈 Silver III", "#c0c0c0"),
+    (1751, 2000, "🥈 Silver IV", "#c0c0c0"),
+    (2001, 2250, "🥇 Gold I", "#ffd700"),
+    (2251, 2500, "🥇 Gold II", "#ffd700"),
+    (2501, 2750, "🥇 Gold III", "#ffd700"),
+    (2751, 3000, "🥇 Gold IV", "#ffd700"),
+    (3001, 99999, "💎 Platinum", "#00eaff"),
+]
+
+async def get_player_position(user_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id FROM users WHERE elo_rating IS NOT NULL ORDER BY elo_rating DESC"
+        )
+        rows = await cur.fetchall()
+        ids = [r[0] for r in rows]
+        return ids.index(user_id) + 1 if user_id in ids else None
+
+def get_rank(elo: int) -> tuple[str, str]:
+    for low, high, name, color in RANKS:
+        if low <= elo <= high:
+            return name, color
+    return "⚪ None", "#a8a8a8"
+
 
 def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
     return (
@@ -236,6 +271,8 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN birth_date TEXT",
             "ALTER TABLE users ADD COLUMN faction TEXT",
             "ALTER TABLE users ADD COLUMN clan_id INTEGER",
+            "ALTER TABLE users ADD COLUMN elo_rating INTEGER DEFAULT 1000",
+            "ALTER TABLE users ADD COLUMN elo_rank TEXT DEFAULT 'None",
         ]:
             try:
                 await db.execute(alter)
@@ -542,6 +579,17 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
     lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+    elo = user.get("elo_rating") or 1000
+    rank_name, color = get_rank(elo)
+
+    # Текущее место в клане
+    import asyncio
+    pos = asyncio.run(get_player_position(user.get("user_id")))
+
+    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
+    lines.append(f'<b>🎖 Ранг:</b> <b><span style="color:{color}">{rank_name}</span></b>')
+    if pos:
+        lines.append(f"📊 Место в клане: <b>#{pos}</b>")
 # История турниров — история передаётся в аргументе `history`
     if history:
         lines.append("\n<b>История турниров</b>")
@@ -2567,6 +2615,8 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    kb.row()
+    kb.button(text="🏆 ТОП-10 игроков клана", callback_data="menu:top10")
     return kb.adjust(1).as_markup()
 
 
@@ -2581,6 +2631,27 @@ async def CW_menu_list(call: CallbackQuery):
         kb.button(text=f"{w['opponents']} — {format_cw_datetime(w['starts_at'])}", callback_data=f"cw:view:{w['id']}")
     await call.message.answer("<b>Активные КВ</b>", reply_markup=kb.adjust(1).as_markup())
     await call.answer()
+
+@dp.callback_query(F.data == "menu:top10")
+async def show_top10(call: CallbackQuery):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT nickname, elo_rating FROM users ORDER BY elo_rating DESC LIMIT 10"
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        await call.answer("Нет данных.", show_alert=True)
+        return
+
+    text = "<b>🏆 ТОП-10 игроков клана</b>\n\n"
+    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+
+    for i, (nick, elo) in enumerate(rows):
+        rank_name, _ = get_rank(elo)
+        text += f"{medals[i]} <b>{i+1}.</b> {nick} — <code>{elo} BBP</code> ({rank_name})\n"
+
+    await call.message.answer(text)
 
 @dp.callback_query(F.data.startswith("cw:view:"))
 async def CW_menu_view(call: CallbackQuery):
