@@ -1460,6 +1460,8 @@ async def cmd_profile(message: Message):
 
     # Текущее место в клане
     import asyncio
+    elo = user.get("elo_rating") or 1000
+    rank_name, color = get_rank(elo)
     pos = await get_player_position(user.get("user_id"))
 
     lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
