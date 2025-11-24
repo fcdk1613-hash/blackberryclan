@@ -2656,7 +2656,7 @@ async def show_top10(call: CallbackQuery):
         return
 
     text = "<b>🏆 ТОП-10 игроков клана</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+    medals = ["🥇", "🥈", "🥉"]
 
     for i, (nick, elo) in enumerate(rows):
         rank_name, _ = get_rank(elo)
