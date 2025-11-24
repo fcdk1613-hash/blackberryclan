@@ -587,10 +587,8 @@ def format_profile(
     user: dict,
     title: str = "Профиль игрока",
     history: list | None = None,
-    pos: int | None = None
-) -> str:
+    pos: int | None = None) -> str:
     lines = [f"<b>{title}</b>"]
-    ...
     if pos is not None:
         lines.append(f"📊 Место в клане: <b>#{pos}</b>")
 # История турниров — история передаётся в аргументе `history`
