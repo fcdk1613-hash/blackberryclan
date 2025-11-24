@@ -383,6 +383,7 @@ class RegStates(StatesGroup):
 
 class TournamentHistory(StatesGroup):
     waiting_text = State()
+    waiting_elo = State()
 
 class AdminEdit(StatesGroup):
     waiting_value = State()
@@ -430,13 +431,59 @@ async def on_hist_text(message: Message, state: FSMContext):
     if not text:
         await message.answer("Пустая запись не добавлена.")
         return
+
+    # сохраняем текст записи и переходим к запросу ELO
+    await state.update_data(hist_text=text)
+    await message.answer(
+        "Сколько очков ELO прибавить игроку? Введите целое число (0, 25, 100 и т.п.)."
+    )
+    await state.set_state(TournamentHistory.waiting_elo)
+
+@dp.message(TournamentHistory.waiting_elo)
+async def on_hist_elo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("hist_target_id")
+    text = data.get("hist_text")
+
+    if not target_id or not text:
+        await message.answer("Данные для записи истории потеряны, попробуйте ещё раз.")
+        await state.clear()
+        return
+
+    raw = message.text.strip()
+    try:
+        elo_delta = int(raw)
+    except ValueError:
+        await message.answer("Введите, пожалуйста, целое число (например, 0, 25 или 100).")
+        return
+
+    if elo_delta < 0:
+        await message.answer("Число должно быть 0 или больше.")
+        return
+
+    # 1) добавляем запись в историю турниров
     await add_tournament_history_entry(target_id, message.from_user.id, text)
+
+    # 2) изменяем ELO игрока
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET elo_rating = COALESCE(elo_rating, 1000) + ? WHERE user_id=?",
+            (elo_delta, target_id),
+        )
+        await db.commit()
+
     await state.clear()
-    # Refresh admin view if possible
+
+    # 3) Обновляем профиль
     user = await get_user(target_id)
     try:
-        await message.answer("✅ Запись добавлена.", reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id))
-        await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))))
+        await message.answer(
+            f"✅ Запись добавлена, ELO изменён на +{elo_delta}.",
+            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id),
+        )
+        await message.answer(
+            format_profile(user, history=await get_tournament_history(int(user.get("user_id"))))
+        )
     except Exception:
         pass
 
