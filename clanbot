@@ -3128,7 +3128,7 @@ async def CW_cmd_stats(message: Message):
     kb = InlineKeyboardBuilder()
     for w in rows:
         res = w.get("winner") or "—"
-        lines.append(f"• {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: {res}")
+        lines.append(f"• {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: победитель {res}")
         kb.button(text=f"🗑 Удалить {w['id']}", callback_data=f"cw:delete:{w['id']}")
     await message.answer("\n".join(lines), reply_markup=kb.adjust(1).as_markup())
 # ======= Admin Menu (/amenu) & Find Player flow =======
