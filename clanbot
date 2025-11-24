@@ -554,7 +554,7 @@ def pad_clan_id(v: Optional[int]) -> str:
         return "—"
     return f"{int(v):04d}"
 
-def format_profile(user: dict, title: str = "Профиль игрока", history: list | None = None) -> str:
+def format_profile(user: dict, title: str = "Профиль игрока", history: list | None = None, pos: int | None = None) -> str:
     lines = [f"<b>{title}</b>"]
     fields = [
         ("ClanID", pad_clan_id(user.get("clan_id"))),
@@ -583,14 +583,13 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     rank_name, color = get_rank(elo)
 
     # Текущее место в клане
-def format_profile(
-    user: dict,
-    title: str = "Профиль игрока",
-    history: list | None = None,
-    pos: int | None = None) -> str:
-    lines = [f"<b>{title}</b>"]
-    if pos is not None:
+    elo = user.get("elo_rating") or 1000
+    rank_name, color = get_rank(elo)
+    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
+    lines.append(f'<b>🎖 Ранг:</b> <b>{rank_name}</b>')
+    if pos:
         lines.append(f"📊 Место в клане: <b>#{pos}</b>")
+
 # История турниров — история передаётся в аргументе `history`
     if history:
         lines.append("\n<b>История турниров</b>")
