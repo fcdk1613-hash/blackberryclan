@@ -2691,7 +2691,8 @@ async def show_top10(call: CallbackQuery):
 
     for i, (nick, elo) in enumerate(rows):
         rank_name, _ = get_rank(elo)
-        text += f"{medals[i]} <b>{i+1}.</b> {nick} — <code>{elo} BBP</code> ({rank_name})\n"
+        emoji = medals[i] if i < len(medals) else "🏅"
+        text += f"{emoji} <b>{i+1}.</b> {nick} — <code>{elo} BBP</code> ({rank_name})\n"
 
     await call.message.answer(text)
 
