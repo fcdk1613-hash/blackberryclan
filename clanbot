@@ -583,13 +583,15 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     rank_name, color = get_rank(elo)
 
     # Текущее место в клане
-    elo = user.get("elo_rating") or 1000
-    rank_name, color = get_rank(elo)
-    pos = await get_player_position(user.get("user_id"))
-
-    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
-    lines.append(f'<b>🎖 Ранг:</b> <b>{rank_name}</b>')
-    if pos:
+def format_profile(
+    user: dict,
+    title: str = "Профиль игрока",
+    history: list | None = None,
+    pos: int | None = None
+) -> str:
+    lines = [f"<b>{title}</b>"]
+    ...
+    if pos is not None:
         lines.append(f"📊 Место в клане: <b>#{pos}</b>")
 # История турниров — история передаётся в аргументе `history`
     if history:
