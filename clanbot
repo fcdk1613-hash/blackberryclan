@@ -704,13 +704,44 @@ async def CW_finish(war_id: int, winner_label: str) -> bool:
         return False
     regs = await CW_registrations(war_id)
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE cw_wars SET status='finished', winner=? WHERE id=?", (winner_label, war_id))
+        await db.execute(
+            "UPDATE cw_wars SET status='finished', winner=? WHERE id=?",
+            (winner_label, war_id),
+        )
         if winner_label == "Blackberry":
             for uid in regs:
-                await db.execute("UPDATE users SET cw_wins = COALESCE(cw_wins,0) + 1 WHERE user_id=?", (uid,))
+                await db.execute(
+                    """
+                    UPDATE users
+                    SET
+                        cw_wins   = COALESCE(cw_wins, 0) + 1,
+                        elo_rating = COALESCE(elo_rating, 1000) +
+                            CASE
+                                WHEN COALESCE(elo_rating, 1000) >= 3000 THEN 25   -- победа при 3000+
+                                WHEN COALESCE(elo_rating, 1000) >= 2000 THEN 50   -- победа при 2000–2999
+                                ELSE 100                                            -- победа до 2000
+                            END
+                    WHERE user_id = ?
+                    """,
+                    (uid,),
+                )
         else:
             for uid in regs:
-                await db.execute("UPDATE users SET cw_losses = COALESCE(cw_losses,0) + 1 WHERE user_id=?", (uid,))
+                await db.execute(
+                    """
+                    UPDATE users
+                    SET
+                        cw_losses = COALESCE(cw_losses, 0) + 1,
+                        elo_rating = COALESCE(elo_rating, 1000) +
+                            CASE
+                                WHEN COALESCE(elo_rating, 1000) >= 3000 THEN -100  -- поражение при 3000+
+                                WHEN COALESCE(elo_rating, 1000) >= 2000 THEN -50   -- поражение при 2000–2999
+                                ELSE -25                                            -- поражение до 2000
+                            END
+                    WHERE user_id = ?
+                    """,
+                    (uid,),
+                )
         await db.commit()
     return True
 
