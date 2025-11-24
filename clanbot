@@ -583,8 +583,9 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     rank_name, color = get_rank(elo)
 
     # Текущее место в клане
-    import asyncio
-    pos = asyncio.run(get_player_position(user.get("user_id")))
+    elo = user.get("elo_rating") or 1000
+    rank_name, color = get_rank(elo)
+    pos = await get_player_position(user.get("user_id"))
 
     lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
     lines.append(f'<b>🎖 Ранг:</b> <b>{rank_name}</b>')
