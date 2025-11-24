@@ -1458,6 +1458,15 @@ async def cmd_profile(message: Message):
     cw_losses = user.get("cw_losses") or 0
     lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
 
+    # Текущее место в клане
+    import asyncio
+    pos = asyncio.run(get_player_position(user.get("user_id")))
+
+    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
+    lines.append(f'<b>🎖 Ранг:</b> <b><span style="color:{color}">{rank_name}</span></b>')
+    if pos:
+        lines.append(f"📊 Место в клане: <b>#{pos}</b>")
+
     history = await get_tournament_history(message.from_user.id)
     if history:
         lines.append("\n<b>История турниров</b>")
