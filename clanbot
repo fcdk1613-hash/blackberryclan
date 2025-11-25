@@ -3138,7 +3138,7 @@ async def main():
         CW_SCHEDULER = scheduler
         scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
         scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
-        scheduler.add_job(apply_training_noresponse_penalties, CronTrigger(hour=23, minute=0))
+        scheduler.add_job(apply_training_noresponse_penalties, CronTrigger(hour=20, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
         scheduler.add_job(check_reserve_expired, CronTrigger(hour=10, minute=15))
         
