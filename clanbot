@@ -2819,12 +2819,12 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="Клановые войны", callback_data="menu:cw")
     kb.row()
+    kb.button(text="🏆 ТОП-10 игроков клана", callback_data="menu:top10")
+    kb.row()
     kb.button(text="Перейти в резерв", callback_data="menu:reserve")
     kb.row()
     kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
     kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
-    kb.row()
-    kb.button(text="🏆 ТОП-10 игроков клана", callback_data="menu:top10")
     return kb.adjust(1).as_markup()
 
 
