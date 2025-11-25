@@ -2084,6 +2084,29 @@ async def check_training_inactive_3days():
     text = "\n".join(lines)
     await notify_staff(text)
 
+async def adjust_training_elo_for_training(user_id: int, delta: int) -> None:
+    """
+    Корректировка ELO за тренировки.
+    Не затрагивает игроков во фракции 'Резерв'.
+    """
+    user = await get_user(user_id)
+    if not user:
+        return
+    # Не трогаем фракцию "Резерв"
+    if user.get("faction") == "Резерв":
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE users
+            SET elo_rating = COALESCE(elo_rating, 1000) + ?
+            WHERE user_id = ?
+            """,
+            (delta, user_id),
+        )
+        await db.commit()
+
 async def save_training_response(user_id: int, date_str: str, response: str, reason: str | None):
     now_iso = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2111,6 +2134,38 @@ async def send_daily_training_poll():
         except Exception:
             continue
 
+async def apply_training_noresponse_penalties():
+    """
+    Штраф -10 ELO за отсутствие ответа на тренировочный опрос за текущий день.
+    Не затрагивает игроков во фракции 'Резерв'.
+    """
+    msk = ZoneInfo("Europe/Moscow")
+    today = datetime.now(msk).date()
+    date_str = today.isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT u.user_id
+            FROM users u
+            WHERE u.status = ?
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM training_attendance t
+                WHERE t.user_id = u.user_id AND t.date = ?
+              )
+            """,
+            ("joined", date_str),
+        )
+        rows = await cur.fetchall()
+
+    for (uid,) in rows:
+        try:
+            await adjust_training_elo_for_training(uid, -10)
+        except Exception:
+            # На всякий случай не роняем всю задачу из-за одной ошибки
+            continue
 
 @dp.callback_query(F.data.startswith("train:"))
 async def on_training_answer(call: CallbackQuery, state: FSMContext):
@@ -2129,6 +2184,7 @@ async def on_training_answer(call: CallbackQuery, state: FSMContext):
 
     if choice == "yes":
         await save_training_response(uid, date_str, "yes", None)
+        await adjust_training_elo_for_training(uid, 10)
         try:
             await call.message.edit_text(f"Ответ сохранён: <b>Да</b> на {date_str}")
         except TelegramBadRequest:
@@ -3019,6 +3075,7 @@ async def main():
         CW_SCHEDULER = scheduler
         scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
         scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
+        scheduler.add_job(apply_training_noresponse_penalties, CronTrigger(hour=23, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
         scheduler.add_job(check_reserve_expired, CronTrigger(hour=10, minute=15))
         
