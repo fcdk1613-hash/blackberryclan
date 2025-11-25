@@ -215,6 +215,31 @@ def get_rank(elo: int) -> tuple[str, str]:
             return name, color
     return "⚪ None", "#a8a8a8"
 
+async def notify_rank_if_changed(user_id: int, old_elo: int, new_elo: int) -> None:
+    """
+    Отправляет игроку ЛС, если его ранг изменился при изменении ELO.
+    """
+    try:
+        old_rank, _ = get_rank(old_elo)
+        new_rank, _ = get_rank(new_elo)
+    except Exception:
+        return
+
+    if old_rank == new_rank:
+        return
+
+    text = (
+        "🎖 <b>Твой ранг изменился!</b>\n\n"
+        f"Было: <b>{old_rank}</b>\n"
+        f"Стало: <b>{new_rank}</b>\n"
+        f"Текущий Elo: <code>{new_elo} BBP</code>"
+    )
+    try:
+        await bot.send_message(user_id, text)
+    except Exception:
+        # Игрок мог закрыть ЛС/заблокировать бота – просто игнорируем
+        pass
+
 
 def faction_tuple_list() -> Tuple[Tuple[str, str], ...]:
     return (
@@ -464,13 +489,22 @@ async def on_hist_elo(message: Message, state: FSMContext):
     # 1) добавляем запись в историю турниров
     await add_tournament_history_entry(target_id, message.from_user.id, text)
 
-    # 2) изменяем ELO игрока
+     # 2) изменяем ELO игрока
+    # Сначала запоминаем старый ELO, чтобы отследить смену ранга
+    prev_user = await get_user(target_id)
+    old_elo = (prev_user.get("elo_rating") if prev_user else None) or 1000
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE users SET elo_rating = COALESCE(elo_rating, 1000) + ? WHERE user_id=?",
             (elo_delta, target_id),
         )
         await db.commit()
+
+    # Узнаём новый ELO и, если ранг изменился, уведомляем игрока
+    new_user = await get_user(target_id)
+    new_elo = (new_user.get("elo_rating") if new_user else None) or 1000
+    await notify_rank_if_changed(target_id, old_elo, new_elo)
 
     await state.clear()
 
@@ -752,28 +786,42 @@ async def CW_finish(war_id: int, winner_label: str) -> bool:
     regs = await CW_registrations(war_id)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE cw_wars SET status='finished', winner=? WHERE id=?",
+            "UPDATE cw_wars SET winner=?, status='finished' WHERE id=?",
             (winner_label, war_id),
         )
         if winner_label == "Blackberry":
             for uid in regs:
+                # ELO до изменения
+                before = await get_user(uid)
+                old_elo = (before.get("elo_rating") if before else None) or 1000
+
                 await db.execute(
                     """
                     UPDATE users
                     SET
-                        cw_wins   = COALESCE(cw_wins, 0) + 1,
+                        cw_wins = COALESCE(cw_wins, 0) + 1,
                         elo_rating = COALESCE(elo_rating, 1000) +
                             CASE
-                                WHEN COALESCE(elo_rating, 1000) >= 3000 THEN 25   -- победа при 3000+
-                                WHEN COALESCE(elo_rating, 1000) >= 2000 THEN 50   -- победа при 2000–2999
-                                ELSE 100                                            -- победа до 2000
+                                WHEN COALESCE(elo_rating, 1000) < 1500 THEN 80   -- победа при ELO < 1500
+                                WHEN COALESCE(elo_rating, 1000) < 2000 THEN 50   -- победа при 1500–1999
+                                ELSE 25                                           -- победа при 2000+
                             END
                     WHERE user_id = ?
                     """,
                     (uid,),
                 )
+
+                # ELO после изменения
+                cur = await db.execute("SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?", (uid,))
+                row = await cur.fetchone()
+                new_elo = row[0] if row and row[0] is not None else 1000
+                await notify_rank_if_changed(uid, old_elo, new_elo)
         else:
             for uid in regs:
+                # ELO до изменения
+                before = await get_user(uid)
+                old_elo = (before.get("elo_rating") if before else None) or 1000
+
                 await db.execute(
                     """
                     UPDATE users
@@ -789,6 +837,13 @@ async def CW_finish(war_id: int, winner_label: str) -> bool:
                     """,
                     (uid,),
                 )
+
+                # ELO после изменения
+                cur = await db.execute("SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?", (uid,))
+                row = await cur.fetchone()
+                new_elo = row[0] if row and row[0] is not None else 1000
+                await notify_rank_if_changed(uid, old_elo, new_elo)
+
         await db.commit()
     return True
 
@@ -2096,6 +2151,8 @@ async def adjust_training_elo_for_training(user_id: int, delta: int) -> None:
     if user.get("faction") == "Резерв":
         return
 
+    old_elo = (user.get("elo_rating") if user.get("elo_rating") is not None else 1000)
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
@@ -2106,6 +2163,12 @@ async def adjust_training_elo_for_training(user_id: int, delta: int) -> None:
             (delta, user_id),
         )
         await db.commit()
+
+    # Проверяем, не сменился ли ранг
+    updated = await get_user(user_id)
+    if updated:
+        new_elo = (updated.get("elo_rating") if updated.get("elo_rating") is not None else 1000)
+        await notify_rank_if_changed(user_id, old_elo, new_elo)
 
 async def save_training_response(user_id: int, date_str: str, response: str, reason: str | None):
     now_iso = datetime.utcnow().isoformat()
