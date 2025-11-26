@@ -2294,7 +2294,7 @@ async def on_training_answer(call: CallbackQuery, state: FSMContext):
 
     uid = call.from_user.id
 
-     if choice == "yes":
+    if choice == "yes":
         # Сначала корректируем ELO относительно предыдущего статуса
         await apply_training_attendance_elo(uid, date_str, "yes")
         # Затем сохраняем новый ответ
