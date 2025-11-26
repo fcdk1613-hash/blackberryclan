@@ -154,6 +154,15 @@ CREATE TABLE IF NOT EXISTS mod_actions (
     created_at TEXT NOT NULL
 );
 """
+CREATE_RATING_CHANGES_SQL = """
+CREATE TABLE IF NOT EXISTS rating_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    delta INTEGER NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+"""
 # Idempotent per-user CW stats
 CW_ALTERS_USERS = [
     "ALTER TABLE users ADD COLUMN cw_wins INTEGER DEFAULT 0",
@@ -287,6 +296,7 @@ async def init_db():
         await db.execute(CREATE_CW_WARS_SQL)
         await db.execute(CREATE_CW_REGS_SQL)
         await db.execute(CREATE_MOD_ACTIONS_SQL)
+        await db.execute(CREATE_RATING_CHANGES_SQL)
         # Migrations
         for alter in [
             "ALTER TABLE users ADD COLUMN applied_at TEXT",
@@ -413,6 +423,9 @@ class TournamentHistory(StatesGroup):
 class AdminEdit(StatesGroup):
     waiting_value = State()
 
+class EloEditState(StatesGroup):
+    waiting_new_elo = State()
+
 
 class ReserveUntilState(StatesGroup):
     waiting_date = State()
@@ -501,6 +514,10 @@ async def on_hist_elo(message: Message, state: FSMContext):
         )
         await db.commit()
 
+    # Логируем изменение рейтинга
+    if elo_delta != 0:
+        await log_rating_change(target_id, elo_delta, reason="tournament_history")
+
     # Узнаём новый ELO и, если ранг изменился, уведомляем игрока
     new_user = await get_user(target_id)
     new_elo = (new_user.get("elo_rating") if new_user else None) or 1000
@@ -519,6 +536,60 @@ async def on_hist_elo(message: Message, state: FSMContext):
             format_profile(user, history=await get_tournament_history(int(user.get("user_id"))))
         )
     except Exception:
+        pass
+
+@dp.message(EloEditState.waiting_new_elo)
+async def on_elo_edit_value(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("elo_edit_user_id")
+    if not target_id:
+        await message.answer("Целевой игрок не найден, начните заново через профиль.")
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    try:
+        new_elo = int(raw)
+    except ValueError:
+        await message.answer("Введите, пожалуйста, целое число (например, 1000, 1250).")
+        return
+
+    # старый рейтинг
+    user = await get_user(target_id)
+    old_elo = (user.get("elo_rating") if user and user.get("elo_rating") is not None else 1000)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET elo_rating = ? WHERE user_id = ?",
+            (new_elo, target_id),
+        )
+        await db.commit()
+
+    delta = new_elo - old_elo
+    if delta != 0:
+        await log_rating_change(target_id, delta, reason=f"admin_set:{message.from_user.id}")
+    await log_mod_action(message.from_user.id, "Ручное изменение рейтинга", target_id=target_id, extra=f"{old_elo}->{new_elo}")
+
+    # уведомляем о смене ранга
+    await notify_rank_if_changed(target_id, old_elo, new_elo)
+
+    await state.clear()
+
+    await message.answer(f"Рейтинг игрока обновлён: {old_elo} → {new_elo} ({'+' if delta >= 0 else ''}{delta}).")
+
+    # пробуем обновить карточку профиля, если данные были сохранены
+    panel_chat_id = data.get("elo_edit_panel_chat_id")
+    panel_msg_id = data.get("elo_edit_panel_msg_id")
+    try:
+        updated_user = await get_user(target_id)
+        await bot.edit_message_text(
+            format_profile(updated_user, history=await get_tournament_history(int(updated_user.get("user_id")))),
+            chat_id=panel_chat_id,
+            message_id=panel_msg_id,
+            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id),
+        )
+    except Exception:
+        # если не получилось — просто ничего не делаем
         pass
 
 @dp.callback_query(F.data.startswith("hist:clear:"))
@@ -581,6 +652,7 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
     if actor_id in (ADMIN_IDS | MODERATOR_IDS):
         pass  # visibility already allowed
     if actor_id in ADMIN_IDS:
+        kb.button(text="⚖Изменить рейтинг", callback_data=f"elo:edit:{user_id}")
         kb.button(text="🧹 Очистить историю игрока", callback_data=f"hist:clear:{user_id}")
     return kb.adjust(1).as_markup()
 
@@ -815,6 +887,10 @@ async def CW_finish(war_id: int, winner_label: str) -> bool:
                 cur = await db.execute("SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?", (uid,))
                 row = await cur.fetchone()
                 new_elo = row[0] if row and row[0] is not None else 1000
+# Логируем изменение рейтинга
+                delta = new_elo - old_elo
+                if delta != 0:
+                    await log_rating_change(uid, delta, reason=f"cw_win_war_{war_id}")
                 await notify_rank_if_changed(uid, old_elo, new_elo)
         else:
             for uid in regs:
@@ -842,6 +918,10 @@ async def CW_finish(war_id: int, winner_label: str) -> bool:
                 cur = await db.execute("SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?", (uid,))
                 row = await cur.fetchone()
                 new_elo = row[0] if row and row[0] is not None else 1000
+# Логируем изменение рейтинга
+                delta = new_elo - old_elo
+                if delta != 0:
+                    await log_rating_change(uid, delta, reason=f"cw_win_war_{war_id}")
                 await notify_rank_if_changed(uid, old_elo, new_elo)
 
         await db.commit()
@@ -931,6 +1011,21 @@ async def log_mod_action(actor_id: int, action: str, target_id: int | None = Non
             await db.commit()
     except Exception as e:
         logging.warning("Failed to log mod action: %r", e)
+
+async def log_rating_change(user_id: int, delta: int, reason: str | None = None) -> None:
+    """
+    Логируем любое изменение рейтинга игрока в таблицу rating_changes.
+    delta — на сколько изменился рейтинг (может быть + или -).
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO rating_changes(user_id, delta, reason, created_at) VALUES (?,?,?,?)",
+                (int(user_id), int(delta), reason or "", datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+    except Exception as e:
+        logging.warning("Failed to log rating change for %s: %r", user_id, e)
 
 
 
@@ -1240,6 +1335,38 @@ async def on_profile_choose_faction(call: CallbackQuery):
         await call.message.edit_text(text + "\n\nВыберите фракцию:", reply_markup=faction_choose_kb(target_id))
     except Exception:
         pass
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("elo:edit:"))
+async def on_elo_edit(call: CallbackQuery, state: FSMContext):
+    # Только админы
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    try:
+        _, _, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    current_elo = (user.get("elo_rating") if user.get("elo_rating") is not None else 1000)
+    await state.update_data(
+        elo_edit_user_id=target_id,
+        elo_edit_panel_chat_id=call.message.chat.id,
+        elo_edit_panel_msg_id=call.message.message_id,
+    )
+    await call.message.answer(
+        f"Текущий рейтинг игрока: {current_elo}.\n"
+        f"Введите новый рейтинг (целое число)."
+    )
+    await state.set_state(EloEditState.waiting_new_elo)
     await call.answer()
 
 @dp.callback_query(F.data.startswith("profile_back:"))
@@ -2163,6 +2290,9 @@ async def adjust_training_elo_for_training(user_id: int, delta: int) -> None:
             (delta, user_id),
         )
         await db.commit()
+
+    # Логируем изменение рейтинга за тренировку
+    await log_rating_change(user_id, delta, reason="training_attendance")
 
     # Проверяем, не сменился ли ранг
     updated = await get_user(user_id)
@@ -3491,6 +3621,7 @@ def admin_menu_kb(is_admin: bool) -> ReplyKeyboardMarkup:
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="Действия модераторов")])
+        keyboard.append([KeyboardButton(text="Изменение рейтинга")])
     keyboard.append([KeyboardButton(text="Закрыть меню")])
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -3666,6 +3797,64 @@ async def on_label_ivent(message: Message):
         await cmd_set_events_text(fake)
     except Exception:
         await message.answer("/ivent")
+
+@dp.message(F.text == "Изменение рейтинга")
+async def on_label_rating_changes(message: Message):
+    # Только админы
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Только администраторы.")
+        return
+
+    # Берём «сегодня» по Москве
+    try:
+        tz = ZoneInfo("Europe/Moscow")
+    except Exception:
+        tz = None
+    today = (datetime.now(tz).date() if tz else datetime.utcnow().date()).isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT rc.user_id,
+                   rc.delta,
+                   u.nickname,
+                   u.tg_link
+            FROM rating_changes rc
+            LEFT JOIN users u ON u.user_id = rc.user_id
+            WHERE date(rc.created_at) = date(?)
+            ORDER BY rc.id ASC
+            """,
+            (today,),
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        await message.answer(f"За сегодня ({today}) изменений рейтинга не найдено.")
+        return
+
+    # Готовим CSV
+    filename = f"rating_changes_{today}.csv"
+    import csv
+
+    with open(filename, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter=";")
+        writer.writerow(["Имя(Ник ТГ)", "Сколько рейтинга"])
+        for user_id, delta, nickname, tg_link in rows:
+            # имя в формате: Ник (tg_link) или просто user_id
+            if nickname and tg_link:
+                name = f"{nickname} ({tg_link})"
+            elif nickname:
+                name = nickname
+            elif tg_link:
+                name = tg_link
+            else:
+                name = str(user_id)
+            writer.writerow([name, delta])
+
+    await message.answer_document(
+        FSInputFile(filename, filename=filename),
+        caption=f"Изменения рейтинга за {today}",
+    )
 
 @dp.message(F.text == "Найти игрока")
 async def find_player_start(message: Message, state: FSMContext):
