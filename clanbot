@@ -2180,6 +2180,55 @@ async def save_training_response(user_id: int, date_str: str, response: str, rea
         )
         await db.commit()
 
+async def apply_training_attendance_elo(user_id: int, date_str: str, new_response: str) -> None:
+    """
+    Корректно меняет ELO за тренировку в зависимости от смены статуса.
+
+    Правила:
+    - За 'yes' даётся +10 ELO, но только если:
+        * раньше не было 'yes' на эту дату
+        * и статус изменён до 20:00 по Москве в день тренировки.
+    - Если был 'yes', а стал 'no' или 'late' — снимаем 10 ELO (независимо от времени).
+    - Переключения между 'no' <-> 'late' или одинаковый ответ ELO не трогают.
+    """
+    # Узнаём предыдущий ответ (если был)
+    prev_response: str | None = None
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT response FROM training_attendance WHERE date=? AND user_id=?",
+            (date_str, user_id),
+        )
+        row = await cur.fetchone()
+        if row:
+            prev_response = row[0]
+
+    # Если статус не изменился — ELO не трогаем
+    if prev_response == new_response:
+        return
+
+    delta = 0
+
+    # Текущее время по Москве
+    msk = ZoneInfo("Europe/Moscow")
+    now_msk = datetime.now(msk)
+    today_str = now_msk.date().isoformat()
+    cutoff_hour = 20  # 20:00 по Москве
+
+    # Переход в "Да"
+    if new_response == "yes" and prev_response != "yes":
+        # Начисляем ELO только если речь про сегодняшнюю тренировку
+        # и ответ/смена статуса сделаны до 20:00 по Москве
+        if date_str == today_str and now_msk.hour < cutoff_hour:
+            delta = 10
+
+    # Уход из "Да" в любой другой статус
+    elif prev_response == "yes" and new_response in ("no", "late"):
+        # Всегда снимаем 10, если человек передумал и больше не "Да"
+        delta = -10
+
+    if delta != 0:
+        await adjust_training_elo_for_training(user_id, delta)
+
 async def send_daily_training_poll():
     # Moscow date for the poll
     msk = ZoneInfo("Europe/Moscow")
@@ -2245,9 +2294,11 @@ async def on_training_answer(call: CallbackQuery, state: FSMContext):
 
     uid = call.from_user.id
 
-    if choice == "yes":
+     if choice == "yes":
+        # Сначала корректируем ELO относительно предыдущего статуса
+        await apply_training_attendance_elo(uid, date_str, "yes")
+        # Затем сохраняем новый ответ
         await save_training_response(uid, date_str, "yes", None)
-        await adjust_training_elo_for_training(uid, 10)
         try:
             await call.message.edit_text(f"Ответ сохранён: <b>Да</b> на {date_str}")
         except TelegramBadRequest:
@@ -2276,16 +2327,30 @@ async def on_training_reason(message: Message, state: FSMContext):
     if not reason:
         await message.answer("Пожалуйста, укажите причину текстом.")
         return
+
     choice = data.get("train_choice")
     date_str = data.get("train_date")
+
+    # Корректируем ELO относительно предыдущего статуса
+    if choice in ("no", "late"):
+        await apply_training_attendance_elo(uid, date_str, choice)
+
+    # Сохраняем ответ в журнал посещаемости
     await save_training_response(uid, date_str, choice, reason)
+
     label = "Нет" if choice == "no" else "Опоздаю"
     await message.answer(f"Ответ сохранён: <b>{label}</b> ({reason}) на {date_str}")
+
     # Optionally remove keyboard from original poll to avoid duplicate clicks
     try:
-        await bot.edit_message_reply_markup(chat_id=data.get("train_chat_id"), message_id=data.get("train_msg_id"), reply_markup=None)
+        await bot.edit_message_reply_markup(
+            chat_id=data.get("train_chat_id"),
+            message_id=data.get("train_msg_id"),
+            reply_markup=None,
+        )
     except Exception:
         pass
+
     await state.clear()
 
 async def fetch_training_stats(date_from: str, date_to: str | None = None):
