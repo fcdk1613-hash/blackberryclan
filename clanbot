@@ -751,7 +751,7 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
             lines.append(f"{k}: {v}")
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
-    lines.append(f"⚔КВ: победы/поражения — {cw_wins}/{cw_losses}")
+    lines.append(f"⚔<b>КВ: победы/поражения</b> — {cw_wins}/{cw_losses}")
 
     # Новые КВ-статы
     revives = user.get("cw_revives") or 0
@@ -765,9 +765,9 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     else:
         kd_str = "∞" if kills else "0"
 
-    lines.append(f"💊Поднятия союзников: {revives}")
-    lines.append(f"🗡Убийства/☠смерти: {kills}/{deaths} (K/D: {kd_str})")
-    lines.append(f"🧲Очки захвата (сумма): {caps}")
+    lines.append(f"💊<b>Поднятия союзников:</b> {revives}")
+    lines.append(f"🗡<b>Убийства/☠смерти:</b> {kills}/{deaths} (K/D: {kd_str})")
+    lines.append(f"🧲<b>Очки захвата (сумма):</b> {caps}")
 
     mvp_count = user.get("cw_mvp_count") or 0
     if mvp_count:
@@ -1814,7 +1814,7 @@ async def cmd_profile(message: Message):
             lines.append(f"{k}: {v}")
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
-    lines.append(f"⚔КВ: победы/поражения — {cw_wins}/{cw_losses}")
+    lines.append(f"⚔<b>КВ: победы/поражения</b> — {cw_wins}/{cw_losses}")
 
     # Новые КВ-статы
     revives = user.get("cw_revives") or 0
@@ -1829,9 +1829,9 @@ async def cmd_profile(message: Message):
     else:
         kd_str = "∞" if kills else "0"
 
-    lines.append(f"💊Поднятия союзников: {revives}")
-    lines.append(f"🗡Убийства/☠смерти: {kills}/{deaths} (K/D: {kd_str})")
-    lines.append(f"🛡Очки захвата (сумма): {caps}")
+    lines.append(f"💊<b>Поднятия союзников:</b> {revives}")
+    lines.append(f"🗡<b>Убийства/☠смерти:</b> {kills}/{deaths} (K/D: {kd_str})")
+    lines.append(f"🛡<b>Очки захвата (сумма):</b> {caps}")
 
     mvp_count = user.get("cw_mvp_count") or 0
     if mvp_count:
