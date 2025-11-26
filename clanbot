@@ -874,7 +874,7 @@ async def CW_finish(war_id: int, winner_label: str) -> bool:
                         cw_wins = COALESCE(cw_wins, 0) + 1,
                         elo_rating = COALESCE(elo_rating, 1000) +
                             CASE
-                                WHEN COALESCE(elo_rating, 1000) < 1500 THEN 80   -- победа при ELO < 1500
+                                WHEN COALESCE(elo_rating, 1000) < 1500 THEN 100   -- победа при ELO < 1500
                                 WHEN COALESCE(elo_rating, 1000) < 2000 THEN 50   -- победа при 1500–1999
                                 ELSE 25                                           -- победа при 2000+
                             END
