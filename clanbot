@@ -101,9 +101,17 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT,
     applied_at TEXT,
     approved_at TEXT,
-    joined_at TEXT
+    joined_at TEXT,
     elo_rating INTEGER DEFAULT 1000,
-    elo_rank TEXT DEFAULT 'None'
+    elo_rank TEXT DEFAULT 'None',
+    cw_wins INTEGER DEFAULT 0,
+    cw_losses INTEGER DEFAULT 0,
+    cw_revives INTEGER DEFAULT 0,
+    cw_kills INTEGER DEFAULT 0,
+    cw_deaths INTEGER DEFAULT 0,
+    cw_capture_points INTEGER DEFAULT 0,
+    cw_mvp_count INTEGER DEFAULT 0,
+    cw_mvp_list TEXT
 );
 """
 CREATE_USERS_ARCHIVE_SQL = """
@@ -308,6 +316,12 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN clan_id INTEGER",
             "ALTER TABLE users ADD COLUMN elo_rating INTEGER DEFAULT 1000",
             "ALTER TABLE users ADD COLUMN elo_rank TEXT DEFAULT 'None",
+            "ALTER TABLE users ADD COLUMN cw_revives INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN cw_kills INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN cw_deaths INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN cw_capture_points INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN cw_mvp_count INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN cw_mvp_list TEXT",
         ]:
             try:
                 await db.execute(alter)
@@ -425,6 +439,12 @@ class AdminEdit(StatesGroup):
 
 class EloEditState(StatesGroup):
     waiting_new_elo = State()
+
+class CWStatsState(StatesGroup):
+    waiting_revives = State()
+    waiting_kills = State()
+    waiting_deaths = State()
+    waiting_caps = State()
 
 
 class ReserveUntilState(StatesGroup):
@@ -732,8 +752,30 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
     lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
-    elo = user.get("elo_rating") or 1000
-    rank_name, color = get_rank(elo)
+
+    # Новые КВ-статы
+    revives = user.get("cw_revives") or 0
+    kills = user.get("cw_kills") or 0
+    deaths = user.get("cw_deaths") or 0
+    caps = user.get("cw_capture_points") or 0
+
+    if deaths:
+        kd = kills / deaths
+        kd_str = f"{kd:.2f}"
+    else:
+        kd_str = "∞" if kills else "0"
+
+    lines.append(f"Поднятия союзников: {revives}")
+    lines.append(f"Убийства/смерти: {kills}/{deaths} (K/D: {kd_str})")
+    lines.append(f"Очки захвата (сумма): {caps}")
+
+    mvp_count = user.get("cw_mvp_count") or 0
+    if mvp_count:
+        lines.append(f"\n<b>MVP в КВ:</b> {mvp_count} раз(а)")
+        mvp_list = (user.get("cw_mvp_list") or "").strip()
+        if mvp_list:
+            wars_str = ", ".join(mvp_list.split(","))
+            lines.append(f"Список КВ (ID): {wars_str}")
 
     # Текущее место в клане
     elo = user.get("elo_rating") or 1000
@@ -851,80 +893,136 @@ async def CW_unregister(war_id: int, user_id: int) -> None:
         await db.execute("DELETE FROM cw_registrations WHERE war_id=? AND user_id=?", (war_id, user_id))
         await db.commit()
 
-async def CW_finish(war_id: int, winner_label: str) -> bool:
+async def CW_finish(
+    war_id: int,
+    winner_label: str,
+    per_player_stats: dict[str, dict[str, int]] | None = None,
+) -> bool:
+    """
+    Завершение КВ с учётом:
+    - базового ELO за победу/поражение;
+    - дополнительного ELO по статистике (поднятия, K/D, очки захвата);
+    - определения MVP по суммарному ELO за матч.
+    """
     war = await CW_get_war(war_id)
     if not war or war.get("status") != "scheduled":
         return False
+
     regs = await CW_registrations(war_id)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE cw_wars SET winner=?, status='finished' WHERE id=?",
             (winner_label, war_id),
         )
-        if winner_label == "Blackberry":
-            for uid in regs:
-                # ELO до изменения
-                before = await get_user(uid)
-                old_elo = (before.get("elo_rating") if before else None) or 1000
 
-                await db.execute(
-                    """
-                    UPDATE users
-                    SET
-                        cw_wins = COALESCE(cw_wins, 0) + 1,
-                        elo_rating = COALESCE(elo_rating, 1000) +
-                            CASE
-                                WHEN COALESCE(elo_rating, 1000) < 1500 THEN 100   -- победа при ELO < 1500
-                                WHEN COALESCE(elo_rating, 1000) < 2000 THEN 50   -- победа при 1500–1999
-                                ELSE 25                                           -- победа при 2000+
-                            END
-                    WHERE user_id = ?
-                    """,
-                    (uid,),
-                )
+        mvp_user_id: int | None = None
+        mvp_elo_gain: float | None = None
 
-                # ELO после изменения
-                cur = await db.execute("SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?", (uid,))
-                row = await cur.fetchone()
-                new_elo = row[0] if row and row[0] is not None else 1000
-# Логируем изменение рейтинга
-                delta = new_elo - old_elo
-                if delta != 0:
-                    await log_rating_change(uid, delta, reason=f"cw_win_war_{war_id}")
-                await notify_rank_if_changed(uid, old_elo, new_elo)
-        else:
-            for uid in regs:
-                # ELO до изменения
-                before = await get_user(uid)
-                old_elo = (before.get("elo_rating") if before else None) or 1000
+        for uid in regs:
+            before = await get_user(uid)
+            old_elo = (before.get("elo_rating") if before else None) or 1000
 
-                await db.execute(
-                    """
-                    UPDATE users
-                    SET
-                        cw_losses = COALESCE(cw_losses, 0) + 1,
-                        elo_rating = COALESCE(elo_rating, 1000) +
-                            CASE
-                                WHEN COALESCE(elo_rating, 1000) >= 3000 THEN -100  -- поражение при 3000+
-                                WHEN COALESCE(elo_rating, 1000) >= 2000 THEN -50   -- поражение при 2000–2999
-                                ELSE -25                                            -- поражение до 2000
-                            END
-                    WHERE user_id = ?
-                    """,
-                    (uid,),
-                )
+            # Базовый ELO за результат КВ
+            if winner_label == "Blackberry":
+                if old_elo < 1500:
+                    base_delta = 100
+                elif old_elo < 2000:
+                    base_delta = 50
+                else:
+                    base_delta = 25
+                cw_win_inc = 1
+                cw_loss_inc = 0
+            else:
+                if old_elo >= 3000:
+                    base_delta = -100
+                elif old_elo >= 2000:
+                    base_delta = -50
+                else:
+                    base_delta = -25
+                cw_win_inc = 0
+                cw_loss_inc = 1
 
-                # ELO после изменения
-                cur = await db.execute("SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?", (uid,))
-                row = await cur.fetchone()
-                new_elo = row[0] if row and row[0] is not None else 1000
-# Логируем изменение рейтинга
-                delta = new_elo - old_elo
-                if delta != 0:
-                    await log_rating_change(uid, delta, reason=f"cw_win_war_{war_id}")
-                await notify_rank_if_changed(uid, old_elo, new_elo)
+            # Доп. ELO по статистике
+            stats_for_user = (per_player_stats or {}).get(str(uid)) or {}
+            revives = int(stats_for_user.get("revives", 0) or 0)
+            kills = int(stats_for_user.get("kills", 0) or 0)
+            deaths = int(stats_for_user.get("deaths", 0) or 0)
+            caps = int(stats_for_user.get("caps", 0) or 0)
+
+            personal_elo = 0.0
+            # 1 поднятие = 0.5 ELO
+            personal_elo += revives * 0.5
+            # kills - deaths = 1 ELO за каждую единицу, если > 0
+            kd_diff = kills - deaths
+            if kd_diff > 0:
+                personal_elo += kd_diff
+            # 1 очко захвата = 0.01 ELO
+            personal_elo += caps * 0.01
+
+            total_delta = base_delta + personal_elo
+
+            # Обновляем пользователя
+            await db.execute(
+                """
+                UPDATE users
+                SET
+                    cw_wins = COALESCE(cw_wins, 0) + ?,
+                    cw_losses = COALESCE(cw_losses, 0) + ?,
+                    cw_revives = COALESCE(cw_revives, 0) + ?,
+                    cw_kills = COALESCE(cw_kills, 0) + ?,
+                    cw_deaths = COALESCE(cw_deaths, 0) + ?,
+                    cw_capture_points = COALESCE(cw_capture_points, 0) + ?,
+                    elo_rating = COALESCE(elo_rating, 1000) + ?
+                WHERE user_id = ?
+                """,
+                (
+                    cw_win_inc,
+                    cw_loss_inc,
+                    revives,
+                    kills,
+                    deaths,
+                    caps,
+                    total_delta,
+                    uid,
+                ),
+            )
+
+            cur = await db.execute(
+                "SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?",
+                (uid,),
+            )
+            row = await cur.fetchone()
+            new_elo = row[0] if row and row[0] is not None else 1000
+
+            delta = new_elo - old_elo
+            if delta != 0:
+                # оставляем старый reason для совместимости
+                await log_rating_change(uid, delta, reason=f"cw_win_war_{war_id}")
+            await notify_rank_if_changed(uid, old_elo, new_elo)
+
+            # MVP по total_delta (ELO за матч)
+            if mvp_elo_gain is None or total_delta > mvp_elo_gain:
+                mvp_elo_gain = total_delta
+                mvp_user_id = uid
+
+        # Обновляем MVP игрока
+        if mvp_user_id is not None:
+            await db.execute(
+                """
+                UPDATE users
+                SET
+                    cw_mvp_count = COALESCE(cw_mvp_count, 0) + 1,
+                    cw_mvp_list = CASE
+                        WHEN cw_mvp_list IS NULL OR cw_mvp_list = '' THEN ?
+                        ELSE cw_mvp_list || ',' || ?
+                    END
+                WHERE user_id = ?
+                """,
+                (str(war_id), str(war_id), mvp_user_id),
+            )
 
         await db.commit()
+
     return True
 
 
@@ -1717,6 +1815,31 @@ async def cmd_profile(message: Message):
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
     lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+
+    # Новые КВ-статы
+    revives = user.get("cw_revives") or 0
+    kills = user.get("cw_kills") or 0
+    deaths = user.get("cw_deaths") or 0
+    caps = user.get("cw_capture_points") or 0
+
+    # K/D
+    if deaths:
+        kd = kills / deaths
+        kd_str = f"{kd:.2f}"
+    else:
+        kd_str = "∞" if kills else "0"
+
+    lines.append(f"Поднятия союзников: {revives}")
+    lines.append(f"Убийства/смерти: {kills}/{deaths} (K/D: {kd_str})")
+    lines.append(f"Очки захвата (сумма): {caps}")
+
+    mvp_count = user.get("cw_mvp_count") or 0
+    if mvp_count:
+        lines.append(f"\n<b>MVP в КВ:</b> {mvp_count} раз(а)")
+        mvp_list = (user.get("cw_mvp_list") or "").strip()
+        if mvp_list:
+            wars_str = ", ".join(mvp_list.split(","))
+            lines.append(f"Список КВ (ID): {wars_str}")
 
     # Текущее место в клане
     import asyncio
@@ -3583,15 +3706,158 @@ async def CW_admin_finish_ask(call: CallbackQuery):
     await call.answer()
 
 @dp.callback_query(F.data.startswith("cw:finishset:"))
-async def CW_admin_finish_set(call: CallbackQuery):
+async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
-        await call.answer("Недостаточно прав.", show_alert=True); return
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
     _, _, war_id_s, who = call.data.split(":")
+    war_id = int(war_id_s)
     label = "Blackberry" if who == "bb" else "Противник"
-    ok = await CW_finish(int(war_id_s), label)
-    if ok:
-        await log_mod_action(call.from_user.id, "Завершение КВ", target_id=int(war_id_s), extra=label)
-    await call.answer("Завершено." if ok else "Не удалось завершить.")
+
+    regs = await CW_registrations(war_id)
+    # Если вдруг нет зарегистрированных игроков — завершаем как раньше
+    if not regs:
+        ok = await CW_finish(war_id, label)
+        if ok:
+            await log_mod_action(call.from_user.id, "Завершение КВ", target_id=war_id, extra=label)
+        await call.answer("Завершено." if ok else "Не удалось завершить.")
+        return
+
+    # Сохраняем данные для FSM
+    await state.update_data(
+        cw_war_id=war_id,
+        cw_winner_label=label,
+        cw_player_ids=regs,
+        cw_index=0,
+        cw_stats={},  # user_id(str) -> {revives, kills, deaths, caps}
+        cw_moderator_id=call.from_user.id,
+    )
+
+    first_uid = regs[0]
+    user = await get_user(first_uid)
+    name = display_name(user, fallback_fullname=str(first_uid))
+
+    await call.message.answer(
+        f"КВ #{war_id}\nПобедитель: {label}\n\n"
+        f"Игрок: {name}\n"
+        f"Введите кол-во поднятий союзников (целое число):"
+    )
+    await state.set_state(CWStatsState.waiting_revives)
+    await call.answer()
+
+@dp.message(CWStatsState.waiting_revives)
+async def cw_stats_revives(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    try:
+        revives = int(raw)
+    except ValueError:
+        await message.answer("Введите, пожалуйста, целое число (0, 1, 2 ...). Повторите ввод кол-ва поднятий союзников:")
+        return
+
+    data = await state.get_data()
+    data["current_revives"] = revives
+    await state.update_data(current_revives=revives)
+
+    await message.answer("Введите кол-во убийств в КВ (целое число):")
+    await state.set_state(CWStatsState.waiting_kills)
+
+
+@dp.message(CWStatsState.waiting_kills)
+async def cw_stats_kills(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    try:
+        kills = int(raw)
+    except ValueError:
+        await message.answer("Введите, пожалуйста, целое число. Повторите ввод кол-ва убийств:")
+        return
+
+    await state.update_data(current_kills=kills)
+    await message.answer("Введите кол-во смертей в КВ (целое число):")
+    await state.set_state(CWStatsState.waiting_deaths)
+
+
+@dp.message(CWStatsState.waiting_deaths)
+async def cw_stats_deaths(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    try:
+        deaths = int(raw)
+    except ValueError:
+        await message.answer("Введите, пожалуйста, целое число. Повторите ввод кол-ва смертей:")
+        return
+
+    await state.update_data(current_deaths=deaths)
+    await message.answer("Введите кол-во очков захвата (целое число):")
+    await state.set_state(CWStatsState.waiting_caps)
+
+
+@dp.message(CWStatsState.waiting_caps)
+async def cw_stats_caps(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    try:
+        caps = int(raw)
+    except ValueError:
+        await message.answer("Введите, пожалуйста, целое число. Повторите ввод кол-ва очков захвата:")
+        return
+
+    data = await state.get_data()
+    war_id = data.get("cw_war_id")
+    winner_label = data.get("cw_winner_label")
+    player_ids: list[int] = data.get("cw_player_ids") or []
+    idx = int(data.get("cw_index") or 0)
+    stats: dict = data.get("cw_stats") or {}
+
+    if war_id is None or winner_label is None or not player_ids:
+        await message.answer("Данные КВ потеряны, начните завершение КВ заново.")
+        await state.clear()
+        return
+
+    uid = player_ids[idx]
+
+    # Текущие значения по игроку
+    revives = int(data.get("current_revives") or 0)
+    kills = int(data.get("current_kills") or 0)
+    deaths = int(data.get("current_deaths") or 0)
+
+    stats[str(uid)] = {
+        "revives": revives,
+        "kills": kills,
+        "deaths": deaths,
+        "caps": caps,
+    }
+
+    # Обновляем FSM
+    idx += 1
+    await state.update_data(
+        cw_index=idx,
+        cw_stats=stats,
+        current_revives=None,
+        current_kills=None,
+        current_deaths=None,
+    )
+
+    # Если есть ещё игроки — переходим к следующему
+    if idx < len(player_ids):
+        next_uid = player_ids[idx]
+        user = await get_user(next_uid)
+        name = display_name(user, fallback_fullname=str(next_uid))
+
+        await message.answer(
+            f"Следующий игрок: {name}\n"
+            f"Введите кол-во поднятий союзников (целое число):"
+        )
+        await state.set_state(CWStatsState.waiting_revives)
+        return
+
+    # Все игроки обработаны — завершаем КВ
+    ok = await CW_finish(war_id, winner_label, per_player_stats=stats)
+    mod_id = data.get("cw_moderator_id")
+
+    if ok and mod_id:
+        await log_mod_action(mod_id, "Завершение КВ", target_id=war_id, extra=winner_label)
+
+    await state.clear()
+    await message.answer("КВ завершено, статистика по игрокам сохранена и ELO обновлён.")
 
 @dp.message(Command("cw_stats"))
 async def CW_cmd_stats(message: Message):
