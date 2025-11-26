@@ -751,7 +751,7 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
             lines.append(f"{k}: {v}")
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
-    lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+    lines.append(f"⚔КВ: победы/поражения — {cw_wins}/{cw_losses}")
 
     # Новые КВ-статы
     revives = user.get("cw_revives") or 0
@@ -765,17 +765,17 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
     else:
         kd_str = "∞" if kills else "0"
 
-    lines.append(f"Поднятия союзников: {revives}")
-    lines.append(f"Убийства/смерти: {kills}/{deaths} (K/D: {kd_str})")
-    lines.append(f"Очки захвата (сумма): {caps}")
+    lines.append(f"💊Поднятия союзников: {revives}")
+    lines.append(f"🗡Убийства/☠смерти: {kills}/{deaths} (K/D: {kd_str})")
+    lines.append(f"🧲Очки захвата (сумма): {caps}")
 
     mvp_count = user.get("cw_mvp_count") or 0
     if mvp_count:
-        lines.append(f"\n<b>MVP в КВ:</b> {mvp_count} раз(а)")
+        lines.append(f"\n<b>👑MVP в КВ:</b> {mvp_count} раз(а)")
         mvp_list = (user.get("cw_mvp_list") or "").strip()
         if mvp_list:
             wars_str = ", ".join(mvp_list.split(","))
-            lines.append(f"Список КВ (ID): {wars_str}")
+            lines.append(f"{wars_str}")
 
     # Текущее место в клане
     elo = user.get("elo_rating") or 1000
@@ -1814,7 +1814,7 @@ async def cmd_profile(message: Message):
             lines.append(f"{k}: {v}")
     cw_wins = user.get("cw_wins") or 0
     cw_losses = user.get("cw_losses") or 0
-    lines.append(f"КВ: победы/поражения — {cw_wins}/{cw_losses}")
+    lines.append(f"⚔КВ: победы/поражения — {cw_wins}/{cw_losses}")
 
     # Новые КВ-статы
     revives = user.get("cw_revives") or 0
@@ -1829,13 +1829,13 @@ async def cmd_profile(message: Message):
     else:
         kd_str = "∞" if kills else "0"
 
-    lines.append(f"Поднятия союзников: {revives}")
-    lines.append(f"Убийства/смерти: {kills}/{deaths} (K/D: {kd_str})")
-    lines.append(f"Очки захвата (сумма): {caps}")
+    lines.append(f"💊Поднятия союзников: {revives}")
+    lines.append(f"🗡Убийства/☠смерти: {kills}/{deaths} (K/D: {kd_str})")
+    lines.append(f"🛡Очки захвата (сумма): {caps}")
 
     mvp_count = user.get("cw_mvp_count") or 0
     if mvp_count:
-        lines.append(f"\n<b>MVP в КВ:</b> {mvp_count} раз(а)")
+        lines.append(f"\n<b>👑MVP в КВ:</b> {mvp_count} раз(а)")
         mvp_list = (user.get("cw_mvp_list") or "").strip()
         if mvp_list:
             wars_str = ", ".join(mvp_list.split(","))
