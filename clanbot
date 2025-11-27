@@ -4039,8 +4039,8 @@ async def CW_cmd_stats(message: Message):
     # Отдельная кнопка "Результаты матчей" с уникальным callback_data
 kb.row()
 kb.button(text="📊 Результаты матчей", callback_data="cw_results")
-
     await message.answer("\n".join(lines), reply_markup=kb.as_markup())
+
 # ======= Admin Menu (/amenu) & Find Player flow =======
 class FindPlayerState(StatesGroup):
     waiting_query = State()
