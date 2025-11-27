@@ -998,7 +998,7 @@ async def CW_finish(war_id: int, winner_label: str, per_player_stats=None) -> bo
                 if kd_diff > 0:
                     personal_elo += kd_diff
                 # 1 очко захвата = 0.01 ELO
-                personal_elo += caps * 0.01
+                personal_elo += caps * 0.005
 
             total_delta = base_delta + personal_elo
 
