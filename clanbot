@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS cw_registrations (
     PRIMARY KEY (war_id, user_id),
     FOREIGN KEY (war_id) REFERENCES cw_wars(id) ON DELETE CASCADE
 );
+"""
 CREATE_CW_PLAYER_STATS_SQL = """
 CREATE TABLE IF NOT EXISTS cw_player_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
