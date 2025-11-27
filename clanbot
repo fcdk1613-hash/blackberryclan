@@ -904,15 +904,20 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     width, height = 900, 520
     rank_rgb = hex_to_rgb(rank_color)
 
-    img = Image.new("RGB", (width, height))
-    # Градиентный фон от цвета ранга к тёмному
-    for y in range(height):
-        ratio = y / (height - 1)
-        r = int(rank_rgb[0] * (1 - ratio) + 15 * ratio)
-        g = int(rank_rgb[1] * (1 - ratio) + 15 * ratio)
-        b = int(rank_rgb[2] * (1 - ratio) + 30 * ratio)
-        for x in range(width):
-            img.putpixel((x, y), (r, g, b))
+    # Фон: пробуем взять готовую картинку, иначе — старый градиент
+    try:
+        img = Image.open("icons/profile_bg.png").convert("RGBA")
+        img = img.resize((width, height))
+    except Exception:
+        img = Image.new("RGBA", (width, height))
+        # Градиентный фон от цвета ранга к тёмному
+        for y in range(height):
+            ratio = y / (height - 1)
+            r = int(rank_rgb[0] * (1 - ratio) + 15 * ratio)
+            g = int(rank_rgb[1] * (1 - ratio) + 15 * ratio)
+            b = int(rank_rgb[2] * (1 - ratio) + 30 * ratio)
+            for x in range(width):
+                img.putpixel((x, y), (r, g, b))
 
     draw = ImageDraw.Draw(img)
 
@@ -933,11 +938,14 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     panel_y0 = content_margin
     panel_x1 = width - content_margin
     panel_y1 = height - content_margin
-    panel_fill = (10, 10, 20, 230)
+    panel_fill = (10, 10, 20, 180)  # полупрозрачная подложка
     panel_outline = rank_rgb
 
+    # Рисуем подложку на отдельном слое и накладываем поверх фона
+    panel_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    panel_draw = ImageDraw.Draw(panel_layer)
     try:
-        draw.rounded_rectangle(
+        panel_draw.rounded_rectangle(
             (panel_x0, panel_y0, panel_x1, panel_y1),
             radius=30,
             fill=panel_fill,
@@ -946,12 +954,15 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         )
     except Exception:
         # если rounded_rectangle недоступен
-        draw.rectangle(
+        panel_draw.rectangle(
             (panel_x0, panel_y0, panel_x1, panel_y1),
             fill=panel_fill,
             outline=panel_outline,
             width=4,
         )
+
+    img = Image.alpha_composite(img.convert("RGBA"), panel_layer)
+    draw = ImageDraw.Draw(img)
 
     # Шапка
     y = panel_y0 + 30
