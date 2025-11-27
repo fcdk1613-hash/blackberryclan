@@ -936,11 +936,11 @@ async def CW_unregister(war_id: int, user_id: int) -> None:
 
 async def CW_finish(war_id: int, winner_label: str, per_player_stats=None) -> bool:
     """
-    Завершение КВ:
-    - всегда считает/копит статистику (поднятия, kills/deaths, очки захвата);
-    - базовый ELO за победу/поражение — как было;
-    - дополнительный ELO за статистику и MVP — ТОЛЬКО при победе Blackberry.
-    """
+   # Завершение КВ:
+   # - всегда считает/копит статистику (поднятия, kills/deaths, очки захвата);
+   # - базовый ELO за победу/поражение — как было;
+   # - дополнительный ELO за статистику и MVP — ТОЛЬКО при победе Blackberry.
+   # """
     war = await CW_get_war(war_id)
     if not war or war.get("status") != "scheduled":
         return False
