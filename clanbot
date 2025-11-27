@@ -847,6 +847,29 @@ def get_rank_badge_text(rank_name: str) -> str:
 
     return "RANK"
 
+def get_rank_icon_path(rank_name: str) -> str | None:
+    """
+    Возвращает путь к PNG-иконке ранга из папки icons рядом с файлом бота.
+    Bronze I-III -> bronze.png, Silver I-IV -> silver.png, Gold I-IV -> gold.png, Platinum -> platinum.png.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    icons_dir = os.path.join(base_dir, "icons")
+
+    name = (rank_name or "").lower()
+    if "bronze" in name:
+        filename = "bronze.png"
+    elif "silver" in name:
+        filename = "silver.png"
+    elif "gold" in name:
+        filename = "gold.png"
+    elif "platinum" in name:
+        filename = "platinum.png"
+    else:
+        return None
+
+    path = os.path.join(icons_dir, filename)
+    return path if os.path.exists(path) else None
+
 def generate_profile_card_image(user: dict, history: list | None = None, pos: int | None = None) -> str:
     """
     Генерирует PNG-картинку профиля игрока и возвращает путь к сохранённому файлу.
@@ -969,7 +992,25 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
 
     bx = elo_block_x + 20
     by = elo_block_y + 15
-    draw.text((bx, by), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
+
+    # Небольшая иконка ранга слева от текста Elo
+    icon_x = bx
+    icon_y = by
+    text_x = bx  # по умолчанию, если иконка не загрузится
+
+    icon_path = get_rank_icon_path(rank_name)
+    if icon_path:
+        try:
+            icon = Image.open(icon_path).convert("RGBA")
+            ICON_SIZE = 56  # компактная иконка, остаётся место под аватар
+            icon = icon.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+            img.paste(icon, (icon_x, icon_y), icon)
+            text_x = icon_x + ICON_SIZE + 12  # сдвигаем текст вправо от иконки
+        except Exception:
+            text_x = bx
+
+    # Текст Elo и ранга внутри блока, выровнен по text_x
+    draw.text((text_x, by), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
     by += 36
 
     # Убираем эмодзи из rank_name, оставляем только текстовую часть
@@ -978,11 +1019,11 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     else:
         clean_rank_label = rank_name
 
-    draw.text((bx, by), f"Ранг: {clean_rank_label}", font=text_font, fill=(255, 255, 255))
+    draw.text((text_x, by), f"Ранг: {clean_rank_label}", font=text_font, fill=(255, 255, 255))
     by += 32
     pos_str = f"#{pos}" if pos else "—"
     draw.text(
-        (bx, by),
+        (text_x, by),
         f"Место в клане: {pos_str}",
         font=text_font,
         fill=(220, 220, 220),
