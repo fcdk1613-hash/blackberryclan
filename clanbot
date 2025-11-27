@@ -971,16 +971,16 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         fill=(220, 220, 220),
     )
     # Блок Elo / ранга в правом верхнем углу
-ELO_BLOCK_WIDTH = 340   # увеличиваем ширину
-ELO_BLOCK_HEIGHT = 150  # чуть выше
-elo_block_x = panel_x1 - ELO_BLOCK_WIDTH - 20
-elo_block_y = panel_y0 + 80
-elo_box = (
-    elo_block_x,
-    elo_block_y,
-    elo_block_x + ELO_BLOCK_WIDTH,
-    elo_block_y + ELO_BLOCK_HEIGHT
-)
+    ELO_BLOCK_WIDTH = 340   # увеличиваем ширину
+    ELO_BLOCK_HEIGHT = 150  # чуть выше
+    elo_block_x = panel_x1 - ELO_BLOCK_WIDTH - 20
+    elo_block_y = panel_y0 + 80
+    elo_box = (
+        elo_block_x,
+        elo_block_y,
+        elo_block_x + ELO_BLOCK_WIDTH,
+        elo_block_y + ELO_BLOCK_HEIGHT
+    )
     try:
         draw.rounded_rectangle(
             elo_box,
