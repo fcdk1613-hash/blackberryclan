@@ -11,6 +11,8 @@ from enum import Enum
 from typing import Optional, Tuple, List
 import aiosqlite
 import csv
+import os
+from PIL import Image, ImageDraw, ImageFont
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart, or_f, Command
@@ -810,6 +812,227 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
 
     return "\n".join(lines)
 
+def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """
+    Преобразует HEX-цвет (например, "#ffd700") в кортеж RGB.
+    """
+    hex_color = (hex_color or "").lstrip("#")
+    if len(hex_color) == 3:
+        hex_color = "".join(ch * 2 for ch in hex_color)
+    try:
+        return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except Exception:
+        # дефолтный почти-чёрный, если вдруг пришёл кривой цвет
+        return (20, 20, 20)
+
+
+def generate_profile_card_image(user: dict, history: list | None = None, pos: int | None = None) -> str:
+    """
+    Генерирует PNG-картинку профиля игрока и возвращает путь к сохранённому файлу.
+    Фон и акценты завязаны на цвет ранга из RANKS.
+    """
+    # Базовые данные
+    nickname = user.get("nickname") or "Без ника"
+    clan_id = pad_clan_id(user.get("clan_id"))
+    faction = user.get("faction") or "—"
+    timezone_val = user.get("timezone") or "—"
+    tg_id = user.get("user_id") or "-"
+    elo = user.get("elo_rating") or 1000
+    rank_name, rank_color = get_rank(elo)
+
+    cw_wins = user.get("cw_wins") or 0
+    cw_losses = user.get("cw_losses") or 0
+    revives = user.get("cw_revives") or 0
+    kills = user.get("cw_kills") or 0
+    deaths = user.get("cw_deaths") or 0
+    caps = user.get("cw_capture_points") or 0
+    mvp_count = user.get("cw_mvp_count") or 0
+
+    if deaths:
+        kd = kills / deaths
+        kd_str = f"{kd:.2f}"
+    else:
+        kd_str = "∞" if kills else "0"
+
+    tournaments_count = len(history) if history else 0
+
+    # Подготовка полотна
+    width, height = 900, 520
+    rank_rgb = hex_to_rgb(rank_color)
+
+    img = Image.new("RGB", (width, height))
+    # Градиентный фон от цвета ранга к тёмному
+    for y in range(height):
+        ratio = y / (height - 1)
+        r = int(rank_rgb[0] * (1 - ratio) + 15 * ratio)
+        g = int(rank_rgb[1] * (1 - ratio) + 15 * ratio)
+        b = int(rank_rgb[2] * (1 - ratio) + 30 * ratio)
+        for x in range(width):
+            img.putpixel((x, y), (r, g, b))
+
+    draw = ImageDraw.Draw(img)
+
+    # Шрифты
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
+        subtitle_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
+        text_font = ImageFont.truetype("DejaVuSans.ttf", 22)
+    except Exception:
+        # если ttf-шрифты не найдены — используем дефолтные
+        title_font = ImageFont.load_default()
+        subtitle_font = ImageFont.load_default()
+        text_font = ImageFont.load_default()
+
+    # Центральная панель
+    content_margin = 40
+    panel_x0 = content_margin
+    panel_y0 = content_margin
+    panel_x1 = width - content_margin
+    panel_y1 = height - content_margin
+    panel_fill = (10, 10, 20, 230)
+    panel_outline = rank_rgb
+
+    try:
+        draw.rounded_rectangle(
+            (panel_x0, panel_y0, panel_x1, panel_y1),
+            radius=30,
+            fill=panel_fill,
+            outline=panel_outline,
+            width=4,
+        )
+    except Exception:
+        # если rounded_rectangle недоступен
+        draw.rectangle(
+            (panel_x0, panel_y0, panel_x1, panel_y1),
+            fill=panel_fill,
+            outline=panel_outline,
+            width=4,
+        )
+
+    # Шапка
+    y = panel_y0 + 30
+    x = panel_x0 + 30
+    rank_badge = rank_name.split()[0] if rank_name else "⚪"
+    title_text = f"{rank_badge} {nickname}"
+    draw.text((x, y), title_text, font=title_font, fill=(255, 255, 255))
+
+    y += 60
+    draw.text(
+        (x, y),
+        f"ClanID: {clan_id}  •  TG: {tg_id}",
+        font=subtitle_font,
+        fill=(220, 220, 220),
+    )
+    y += 40
+    draw.text(
+        (x, y),
+        f"Фракция: {faction}   •   Часовой пояс: {timezone_val}",
+        font=text_font,
+        fill=(200, 200, 200),
+    )
+
+    # Блок Elo / ранга в правом верхнем углу
+    elo_block_x = panel_x1 - 280
+    elo_block_y = panel_y0 + 40
+    elo_box = (elo_block_x, elo_block_y, panel_x1 - 30, elo_block_y + 120)
+    try:
+        draw.rounded_rectangle(
+            elo_box,
+            radius=20,
+            fill=(0, 0, 0, 160),
+            outline=panel_outline,
+            width=2,
+        )
+    except Exception:
+        draw.rectangle(
+            elo_box,
+            fill=(0, 0, 0, 160),
+            outline=panel_outline,
+            width=2,
+        )
+
+    bx = elo_block_x + 20
+    by = elo_block_y + 15
+    draw.text((bx, by), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
+    by += 36
+    draw.text((bx, by), f"Ранг: {rank_name}", font=text_font, fill=(255, 255, 255))
+    by += 32
+    pos_str = f"#{pos}" if pos else "—"
+    draw.text(
+        (bx, by),
+        f"Место в клане: {pos_str}",
+        font=text_font,
+        fill=(220, 220, 220),
+    )
+
+    # Блок статистики КВ
+    stats_x = panel_x0 + 30
+    stats_y = panel_y0 + 150
+    draw.text((stats_x, stats_y), "Статистика КВ", font=subtitle_font, fill=(255, 255, 255))
+    stats_y += 40
+    draw.text(
+        (stats_x, stats_y),
+        f"Победы / Поражения: {cw_wins} / {cw_losses}",
+        font=text_font,
+        fill=(220, 220, 220),
+    )
+    stats_y += 30
+    draw.text(
+        (stats_x, stats_y),
+        f"K/D: {kills}/{deaths} ({kd_str})",
+        font=text_font,
+        fill=(220, 220, 220),
+    )
+    stats_y += 30
+    draw.text(
+        (stats_x, stats_y),
+        f"Поднятия союзников: {revives}",
+        font=text_font,
+        fill=(220, 220, 220),
+    )
+    stats_y += 30
+    draw.text(
+        (stats_x, stats_y),
+        f"Очки захвата (сумма): {caps}",
+        font=text_font,
+        fill=(220, 220, 220),
+    )
+
+    # Блок трофеев внизу
+    trophies_x = panel_x0 + 30
+    trophies_y = panel_y1 - 140
+    draw.text((trophies_x, trophies_y), "Трофеи", font=subtitle_font, fill=(255, 255, 255))
+    trophies_y += 40
+    trophies_line_1 = f"👑 MVP в КВ: {mvp_count} раз(а)" if mvp_count else "👑 MVP в КВ: —"
+    draw.text(
+        (trophies_x, trophies_y),
+        trophies_line_1,
+        font=text_font,
+        fill=(230, 230, 230),
+    )
+    trophies_y += 30
+    trophies_line_2 = (
+        f"🏆 Участие в турнирах: {tournaments_count}"
+        if tournaments_count
+        else "🏆 Участие в турнирах: —"
+    )
+    draw.text(
+        (trophies_x, trophies_y),
+        trophies_line_2,
+        font=text_font,
+        fill=(230, 230, 230),
+    )
+
+    # Сохраняем картинку рядом с main.py в папку profile_cards
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(base_dir, "profile_cards")
+    os.makedirs(out_dir, exist_ok=True)
+
+    filename = f"profile_{tg_id}.png"
+    full_path = os.path.join(out_dir, filename)
+    img.save(full_path, "PNG")
+
+    return full_path
 
 def display_name(user: dict | None, fallback_fullname: str | None = None) -> str:
     try:
@@ -1851,66 +2074,28 @@ async def cmd_profile(message: Message):
         await message.answer("Профиль не найден. Нажмите /start")
         return
 
-    lines = ["<b>Ваш профиль</b>"]
-    fields = [
-        ("TG ID", user.get("user_id")),
-        ("Ник(реальное имя)", user.get("nickname")),
-        ("Дискорд", user.get("discord")),
-        ("STEAM ID", user.get("steamid")),
-        ("Дата рождения", user.get("birth_date")),
-        ("Часовой пояс", user.get("timezone")),
-        ("Фракция", user.get("faction")),
-    ]
-    for k, v in fields:
-        if v not in (None, "", "None"):
-            lines.append(f"{k}: {v}")
-    cw_wins = user.get("cw_wins") or 0
-    cw_losses = user.get("cw_losses") or 0
-    lines.append(f"⚔<b>КВ: победы/поражения</b> — {cw_wins}/{cw_losses}")
+    import asyncio  # оставляем, как и было, чтобы не выкидывать лишний код
 
-    # Новые КВ-статы
-    revives = user.get("cw_revives") or 0
-    kills = user.get("cw_kills") or 0
-    deaths = user.get("cw_deaths") or 0
-    caps = user.get("cw_capture_points") or 0
-
-    # K/D
-    if deaths:
-        kd = kills / deaths
-        kd_str = f"{kd:.2f}"
-    else:
-        kd_str = "∞" if kills else "0"
-
-    lines.append(f"💊<b>Поднятия союзников:</b> {revives}")
-    lines.append(f"🗡<b>Убийства/☠смерти:</b> {kills}/{deaths} (K/D: {kd_str})")
-    lines.append(f"🛡<b>Очки захвата (сумма):</b> {caps}")
-
-    mvp_count = user.get("cw_mvp_count") or 0
-    if mvp_count:
-        lines.append(f"\n<b>👑MVP в КВ:</b> {mvp_count} раз(а)")
-        mvp_list = (user.get("cw_mvp_list") or "").strip()
-        if mvp_list:
-            wars_str = ", ".join(mvp_list.split(","))
-            lines.append(f"Список КВ (ID): {wars_str}")
-
-    # Текущее место в клане
-    import asyncio
-    elo = user.get("elo_rating") or 1000
-    rank_name, color = get_rank(elo)
+    # История турниров и позиция по Elo
+    history = await get_tournament_history(message.from_user.id)
     pos = await get_player_position(user.get("user_id"))
 
-    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
-    lines.append(f'<b>🎖 Ранг:</b> <b>{rank_name}</b>')
+    # Генерируем картинку профиля
+    image_path = generate_profile_card_image(user, history=history, pos=pos)
+
+    # Подпись под картинкой — короткое резюме
+    elo = user.get("elo_rating") or 1000
+    rank_name, _ = get_rank(elo)
+    caption_lines = [
+        "<b>Ваш профиль</b>",
+        f"🏅 Elo: <code>{elo} BBP</code>",
+        f"🎖 Ранг: <b>{rank_name}</b>",
+    ]
     if pos:
-        lines.append(f"📊 Место в клане: <b>#{pos}</b>")
+        caption_lines.append(f"📊 Место в клане: <b>#{pos}</b>")
 
-    history = await get_tournament_history(message.from_user.id)
-    if history:
-        lines.append("\n<b>История турниров</b>")
-        for created_at, entry_text in history:
-            lines.append(f"- [{created_at.split('T')[0]}] {entry_text}")
-
-    await message.answer("\n".join(lines))
+    photo = FSInputFile(image_path)
+    await message.answer_photo(photo=photo, caption="\n".join(caption_lines))
 
 
 @dp.message(F.chat.id == CLAN_CHAT_ID, F.new_chat_members)
