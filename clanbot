@@ -974,7 +974,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     ELO_BLOCK_WIDTH = 340   # увеличенная ширина под иконку + текст
     ELO_BLOCK_HEIGHT = 150  # немного выше стандартного блока
 
-    elo_block_x = panel_x1 - ELO_BLOCK_WIDTH - 20
+    elo_block_x = panel_x1 - ELO_BLOCK_WIDTH - 60
     elo_block_y = panel_y0 + 80
     elo_box = (
         elo_block_x,
