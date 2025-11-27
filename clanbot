@@ -4664,44 +4664,17 @@ async def find_player_query(message: Message, state: FSMContext):
         await message.answer("Пользователь не найден.")
         return
 
-    # История турниров и позиция по Elo
+    # История турниров (нужна и для картинки, и для текстового профиля)
     user_id_int = int(target_user.get("user_id"))
     history = await get_tournament_history(user_id_int)
-    pos = await get_player_position(user_id_int)
 
-    # Картинка профиля (та же логика, что и в /profile)
-    image_path = generate_profile_card_image(target_user, history=history, pos=pos)
-
-    elo = target_user.get("elo_rating") or 1000
-    rank_name, _ = get_rank(elo)
-
-    caption_lines = [
-        "<b>Профиль игрока</b>",
-        f"🏅 Elo: <code>{elo} BBP</code>",
-        f"🎖 Ранг: <b>{rank_name}</b>",
-    ]
-    if pos:
-        caption_lines.append(f"📊 Место в клане: <b>#{pos}</b>")
-
-    # История турниров под картинкой, сразу после информации об Elo
-    if history:
-        caption_lines.append("")
-        caption_lines.append("<b>🏆 История турниров</b>")
-        for created_at, entry_text in history:
-            # created_at может быть datetime или строкой
-            if isinstance(created_at, str):
-                date_str = created_at.split("T")[0]
-            else:
-                date_str = str(created_at)[:10]
-            caption_lines.append(f"- [{date_str}] {entry_text}")
-
-    # Сначала шлём картинку профиля
+    # Картинка профиля без лишнего текста (только изображение)
+    image_path = generate_profile_card_image(target_user, history=history, pos=None)
     await message.answer_photo(
-        photo=FSInputFile(image_path),
-        caption="\n".join(caption_lines),
+        photo=FSInputFile(image_path)
     )
 
-    # Затем — текстовую админ-карточку с кнопками (как и было)
+    # Дальше — как было изначально: один текстовый профиль с кнопками
     await message.answer(
         format_profile(target_user, history=history),
         reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
