@@ -960,7 +960,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     # Вместо эмодзи делаем текстовый бейдж (GLD, BRZ, ...),
     # чтобы не было квадратиков
     rank_badge = get_rank_badge_text(rank_name)
-    title_text = f"[{rank_badge}] {nickname}"
+    title_text = f"{nickname}"
     draw.text((x, y), title_text, font=title_font, fill=(255, 255, 255))
 
     y += 60
