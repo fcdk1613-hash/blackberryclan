@@ -949,7 +949,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     )
     # Блок Elo / ранга в правом верхнем углу
     elo_block_x = panel_x1 - 280
-    elo_block_y = panel_y0 + 60
+    elo_block_y = panel_y0 + 100
     elo_box = (elo_block_x, elo_block_y, panel_x1 - 30, elo_block_y + 120)
     try:
         draw.rounded_rectangle(
