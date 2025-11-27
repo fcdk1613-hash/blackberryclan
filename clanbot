@@ -970,16 +970,17 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         font=subtitle_font,
         fill=(220, 220, 220),
     )
-    # Блок Elo / ранга в правом верхнем углу
-    ELO_BLOCK_WIDTH = 340   # увеличиваем ширину
-    ELO_BLOCK_HEIGHT = 150  # чуть выше
+   # Блок Elo / ранга в правом верхнем углу
+    ELO_BLOCK_WIDTH = 340   # увеличенная ширина под иконку + текст
+    ELO_BLOCK_HEIGHT = 150  # немного выше стандартного блока
+
     elo_block_x = panel_x1 - ELO_BLOCK_WIDTH - 20
     elo_block_y = panel_y0 + 80
     elo_box = (
         elo_block_x,
         elo_block_y,
         elo_block_x + ELO_BLOCK_WIDTH,
-        elo_block_y + ELO_BLOCK_HEIGHT
+        elo_block_y + ELO_BLOCK_HEIGHT,
     )
     try:
         draw.rounded_rectangle(
@@ -997,68 +998,45 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
             width=2,
         )
 
-# Позиции внутри блока
-padding = 20
-text_x = elo_block_x + padding + 110  # текст справа от иконки
-text_y = elo_block_y + 20
+    # Позиции внутри блока
+    padding = 20
+    text_x = elo_block_x + padding + 110  # текст справа от иконки
+    text_y = elo_block_y + 20
 
-# Иконка ранга
-icon_path = get_rank_icon_path(rank_name)
-if icon_path and os.path.exists(icon_path):
-    icon = Image.open(icon_path).convert("RGBA")
-
-    ICON_SIZE = 96  # увеличенная иконка
-    icon = icon.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
-
-    # Центруем иконку по вертикали блока Elo
-    icon_x = elo_block_x + padding
-    icon_y = elo_block_y + (ELO_BLOCK_HEIGHT - ICON_SIZE) // 2
-
-    img.paste(icon, (icon_x, icon_y), icon)
-
-# Текст Elo и ранга
-draw.text((text_x, text_y), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
-text_y += 40
-
-# Убираем эмодзи из rank_name
-clean_rank = rank_name.split(" ", 1)[1] if " " in rank_name else rank_name
-draw.text((text_x, text_y), f"Ранг: {clean_rank}", font=text_font, fill=(255, 255, 255))
-text_y += 32
-
-pos_str = f"#{pos}" if pos else "—"
-draw.text((text_x, text_y), f"Место в клане: {pos_str}", font=text_font, fill=(220, 220, 220))
-
-    # Небольшая иконка ранга слева от текста Elo
-    icon_x = bx
-    icon_y = by
-    text_x = bx  # по умолчанию, если иконка не загрузится
-
+    # Иконка ранга
     icon_path = get_rank_icon_path(rank_name)
-    if icon_path:
+    if icon_path and os.path.exists(icon_path):
         try:
             icon = Image.open(icon_path).convert("RGBA")
-            ICON_SIZE = 56  # компактная иконка, остаётся место под аватар
-            icon = icon.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
-            img.paste(icon, (icon_x, icon_y), icon)
-            text_x = icon_x + ICON_SIZE + 12  # сдвигаем текст вправо от иконки
-        except Exception:
-            text_x = bx
 
-    # Текст Elo и ранга внутри блока, выровнен по text_x
-    draw.text((text_x, by), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
-    by += 36
+            ICON_SIZE = 96  # увеличенная иконка
+            icon = icon.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+
+            # Центруем иконку по вертикали блока Elo
+            icon_x = elo_block_x + padding
+            icon_y = elo_block_y + (ELO_BLOCK_HEIGHT - ICON_SIZE) // 2
+
+            img.paste(icon, (icon_x, icon_y), icon)
+        except Exception:
+            # если с иконкой что-то пошло не так — просто рисуем текст без неё
+            pass
+
+    # Текст Elo и ранга
+    draw.text((text_x, text_y), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
+    text_y += 40
 
     # Убираем эмодзи из rank_name, оставляем только текстовую часть
     if " " in rank_name:
-        clean_rank_label = rank_name.split(" ", 1)[1]
+        clean_rank = rank_name.split(" ", 1)[1]
     else:
-        clean_rank_label = rank_name
+        clean_rank = rank_name
 
-    draw.text((text_x, by), f"Ранг: {clean_rank_label}", font=text_font, fill=(255, 255, 255))
-    by += 32
+    draw.text((text_x, text_y), f"Ранг: {clean_rank}", font=text_font, fill=(255, 255, 255))
+    text_y += 32
+
     pos_str = f"#{pos}" if pos else "—"
     draw.text(
-        (text_x, by),
+        (text_x, text_y),
         f"Место в клане: {pos_str}",
         font=text_font,
         fill=(220, 220, 220),
