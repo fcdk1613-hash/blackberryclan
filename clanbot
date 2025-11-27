@@ -1023,7 +1023,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
 
     # Блок трофеев внизу
     trophies_x = panel_x0 + 30
-    trophies_y = panel_y1 - 160
+    trophies_y = panel_y1 - 120
     draw.text((trophies_x, trophies_y), "Трофеи", font=subtitle_font, fill=(255, 255, 255))
     trophies_y += 40
     trophies_line_1 = f"👑 MVP в КВ: {mvp_count} раз(а)" if mvp_count else "👑 MVP в КВ: —"
