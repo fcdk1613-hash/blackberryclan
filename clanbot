@@ -3129,19 +3129,19 @@ async def cmd_seed(message: Message):
 # ======= MENU (joined-only) =======
 def clan_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Изменить статус посещения", callback_data="menu:change_attendance")
+    kb.button(text="♻ Изменить статус посещения", callback_data="menu:change_attendance")
     kb.row()
-    kb.button(text="Полезные контакты", callback_data="menu:contacts")
-    kb.button(text="Предстоящие ивенты", callback_data="menu:events")
+    kb.button(text="📞 Полезные контакты", callback_data="menu:contacts")
+    kb.button(text="📆 Предстоящие ивенты", callback_data="menu:events")
     kb.row()
-    kb.button(text="Клановые войны", callback_data="menu:cw")
+    kb.button(text="⚔ Клановые войны", callback_data="menu:cw")
     kb.row()
     kb.button(text="🏆 ТОП-10 игроков клана", callback_data="menu:top10")
     kb.row()
-    kb.button(text="Перейти в резерв", callback_data="menu:reserve")
+    kb.button(text="💤 Перейти в резерв", callback_data="menu:reserve")
     kb.row()
-    kb.button(text="Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
-    kb.button(text="Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
+    kb.button(text="▶ Подключиться к [RU] Фруктовый сад", url="https://squadbrowser.org/#snprwyx")
+    kb.button(text="▶ Подключиться к Тренировочный сервер №1", url="https://squadbrowser.org/#siqxxg3")
     return kb.adjust(1).as_markup()
 
 
