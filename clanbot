@@ -1087,33 +1087,37 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         fill=(220, 220, 220),
     )
 
-    # Смещаем MVP чуть ниже
+    # Чуть ниже — строка MVP с иконкой
     stats_y += 40
+    mvp_icon_size = 32
+    mvp_icon_offset_y = -4  # подровнять по вертикали с текстом
 
-    # === MVP ICON ===
+    icon_x = stats_x
+    icon_y = stats_y
+
     try:
         mvp_icon = Image.open("icons/mvp.png").convert("RGBA")
-        mvp_icon = mvp_icon.resize((32, 32))  # маленькая иконка
-        card.paste(mvp_icon, (stats_x, stats_y), mvp_icon)
+        mvp_icon = mvp_icon.resize((mvp_icon_size, mvp_icon_size))
+        img.paste(mvp_icon, (icon_x, icon_y + mvp_icon_offset_y), mvp_icon)
     except Exception:
-        # Если иконка не загрузилась — fallback на эмодзи
+        # fallback: если иконки нет, рисуем эмодзи
         draw.text(
-            (stats_x, stats_y),
+            (icon_x, icon_y),
             "👑",
             font=text_font,
             fill=(220, 220, 220),
         )
 
-    # Текст справа от иконки
-    mvp_text_x = stats_x + 40  # небольшое смещение вправо от иконки
+    mvp_text_x = icon_x + mvp_icon_size + 8
     mvp_line = f"MVP в КВ: {mvp_count} раз(а)" if mvp_count else "MVP в КВ: —"
-
     draw.text(
-        (mvp_text_x, stats_y + 5),
+        (mvp_text_x, stats_y),
         mvp_line,
         font=text_font,
         fill=(220, 220, 220),
     )
+
+    # Сохраняем картинку рядом с main.py в папку profile_cards
 
     # Сохраняем картинку рядом с main.py в папку profile_cards
     base_dir = os.path.dirname(os.path.abspath(__file__))
