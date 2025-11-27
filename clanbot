@@ -825,6 +825,27 @@ def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         # дефолтный почти-чёрный, если вдруг пришёл кривой цвет
         return (20, 20, 20)
 
+def get_rank_badge_text(rank_name: str) -> str:
+    """
+    Возвращает короткий текстовый бейдж ранга (без эмодзи),
+    чтобы не было квадратиков в картинке.
+    """
+    if not rank_name:
+        return "NONE"
+
+    name = rank_name.lower()
+    if "bronze" in name:
+        return "BRZ"
+    if "silver" in name:
+        return "SLV"
+    if "gold" in name:
+        return "GLD"
+    if "platinum" in name:
+        return "PLT"
+    if "diamond" in name:
+        return "DIA"
+
+    return "RANK"
 
 def generate_profile_card_image(user: dict, history: list | None = None, pos: int | None = None) -> str:
     """
@@ -912,8 +933,11 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     # Шапка
     y = panel_y0 + 30
     x = panel_x0 + 30
-    rank_badge = rank_name.split()[0] if rank_name else "⚪"
-    title_text = f"{rank_badge} {nickname}"
+
+    # Вместо эмодзи делаем текстовый бейдж (GLD, BRZ, ...),
+    # чтобы не было квадратиков
+    rank_badge = get_rank_badge_text(rank_name)
+    title_text = f"[{rank_badge}] {nickname}"
     draw.text((x, y), title_text, font=title_font, fill=(255, 255, 255))
 
     y += 60
@@ -947,7 +971,14 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     by = elo_block_y + 15
     draw.text((bx, by), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
     by += 36
-    draw.text((bx, by), f"Ранг: {rank_name}", font=text_font, fill=(255, 255, 255))
+
+    # Убираем эмодзи из rank_name, оставляем только текстовую часть
+    if " " in rank_name:
+        clean_rank_label = rank_name.split(" ", 1)[1]
+    else:
+        clean_rank_label = rank_name
+
+    draw.text((bx, by), f"Ранг: {clean_rank_label}", font=text_font, fill=(255, 255, 255))
     by += 32
     pos_str = f"#{pos}" if pos else "—"
     draw.text(
