@@ -1074,30 +1074,13 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         font=text_font,
         fill=(220, 220, 220),
     )
-
-    # Блок трофеев внизу
-    trophies_x = panel_x0 + 30
-    trophies_y = panel_y1 - 120
-    draw.text((trophies_x, trophies_y), "Трофеи", font=subtitle_font, fill=(255, 255, 255))
-    trophies_y += 40
-    trophies_line_1 = f"👑 MVP в КВ: {mvp_count} раз(а)" if mvp_count else "👑 MVP в КВ: —"
+    stats_y += 30
+    mvp_line = f"👑 MVP в КВ: {mvp_count} раз(а)" if mvp_count else "👑 MVP в КВ: —"
     draw.text(
-        (trophies_x, trophies_y),
-        trophies_line_1,
+        (stats_x, stats_y),
+        mvp_line,
         font=text_font,
-        fill=(230, 230, 230),
-    )
-    trophies_y += 30
-    trophies_line_2 = (
-        f"🏆 Участие в турнирах: {tournaments_count}"
-        if tournaments_count
-        else "🏆 Участие в турнирах: —"
-    )
-    draw.text(
-        (trophies_x, trophies_y),
-        trophies_line_2,
-        font=text_font,
-        fill=(230, 230, 230),
+        fill=(220, 220, 220),
     )
 
     # Сохраняем картинку рядом с main.py в папку profile_cards
@@ -1750,7 +1733,41 @@ async def cmd_player(message: Message, command: Command):
         await message.answer("Пользователь не найден.")
         return
 
-    await message.answer(format_profile(target_user, history=await get_tournament_history(int(target_user.get("user_id")))), reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id))
+    # История турниров и позиция по Elo
+    history = await get_tournament_history(int(target_user.get("user_id")))
+    pos = await get_player_position(int(target_user.get("user_id")))
+
+    # Картинка профиля (та же, что и в /profile)
+    image_path = generate_profile_card_image(target_user, history=history, pos=pos)
+
+    elo = target_user.get("elo_rating") or 1000
+    rank_name, _ = get_rank(elo)
+    caption_lines = [
+        "<b>Профиль игрока</b>",
+        f"🏅 Elo: <code>{elo} BBP</code>",
+        f"🎖 Ранг: <b>{rank_name}</b>",
+    ]
+    if pos:
+        caption_lines.append(f"📊 Место в клане: <b>#{pos}</b>")
+
+    # История турниров под картинкой, сразу после блока Elo
+    if history:
+        caption_lines.append("")
+        caption_lines.append("<b>🏆 История турниров</b>")
+        for created_at, entry_text in history:
+            date_str = created_at.split("T")[0] if isinstance(created_at, str) else str(created_at)[:10]
+            caption_lines.append(f"- [{date_str}] {entry_text}")
+
+    await message.answer_photo(
+        photo=FSInputFile(image_path),
+        caption="\n".join(caption_lines),
+    )
+
+    # Текстовая админ-карточка остаётся как была
+    await message.answer(
+        format_profile(target_user, history=history),
+        reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
+    )
 
 @dp.callback_query(F.data.startswith("profile_refresh:"))
 async def on_profile_refresh(call: CallbackQuery):
@@ -2157,10 +2174,10 @@ async def cmd_profile(message: Message):
     history = await get_tournament_history(message.from_user.id)
     pos = await get_player_position(user.get("user_id"))
 
-    # Генерируем картинку профиля
+   # Генерируем картинку профиля
     image_path = generate_profile_card_image(user, history=history, pos=pos)
 
-    # Подпись под картинкой — короткое резюме
+    # Подпись под картинкой — короткое резюме + история турниров
     elo = user.get("elo_rating") or 1000
     rank_name, _ = get_rank(elo)
     caption_lines = [
@@ -2170,6 +2187,14 @@ async def cmd_profile(message: Message):
     ]
     if pos:
         caption_lines.append(f"📊 Место в клане: <b>#{pos}</b>")
+
+    # История турниров сразу под блоком Elo
+    if history:
+        caption_lines.append("")
+        caption_lines.append("<b>🏆 История турниров</b>")
+        for created_at, entry_text in history:
+            date_str = created_at.split("T")[0] if isinstance(created_at, str) else str(created_at)[:10]
+            caption_lines.append(f"- [{date_str}] {entry_text}")
 
     photo = FSInputFile(image_path)
     await message.answer_photo(photo=photo, caption="\n".join(caption_lines))
