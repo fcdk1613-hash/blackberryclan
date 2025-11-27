@@ -971,9 +971,16 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         fill=(220, 220, 220),
     )
     # Блок Elo / ранга в правом верхнем углу
-    elo_block_x = panel_x1 - 280
-    elo_block_y = panel_y0 + 100
-    elo_box = (elo_block_x, elo_block_y, panel_x1 - 30, elo_block_y + 120)
+ELO_BLOCK_WIDTH = 340   # увеличиваем ширину
+ELO_BLOCK_HEIGHT = 150  # чуть выше
+elo_block_x = panel_x1 - ELO_BLOCK_WIDTH - 20
+elo_block_y = panel_y0 + 80
+elo_box = (
+    elo_block_x,
+    elo_block_y,
+    elo_block_x + ELO_BLOCK_WIDTH,
+    elo_block_y + ELO_BLOCK_HEIGHT
+)
     try:
         draw.rounded_rectangle(
             elo_box,
@@ -990,8 +997,36 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
             width=2,
         )
 
-    bx = elo_block_x + 20
-    by = elo_block_y + 15
+# Позиции внутри блока
+padding = 20
+text_x = elo_block_x + padding + 110  # текст справа от иконки
+text_y = elo_block_y + 20
+
+# Иконка ранга
+icon_path = get_rank_icon_path(rank_name)
+if icon_path and os.path.exists(icon_path):
+    icon = Image.open(icon_path).convert("RGBA")
+
+    ICON_SIZE = 96  # увеличенная иконка
+    icon = icon.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+
+    # Центруем иконку по вертикали блока Elo
+    icon_x = elo_block_x + padding
+    icon_y = elo_block_y + (ELO_BLOCK_HEIGHT - ICON_SIZE) // 2
+
+    img.paste(icon, (icon_x, icon_y), icon)
+
+# Текст Elo и ранга
+draw.text((text_x, text_y), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
+text_y += 40
+
+# Убираем эмодзи из rank_name
+clean_rank = rank_name.split(" ", 1)[1] if " " in rank_name else rank_name
+draw.text((text_x, text_y), f"Ранг: {clean_rank}", font=text_font, fill=(255, 255, 255))
+text_y += 32
+
+pos_str = f"#{pos}" if pos else "—"
+draw.text((text_x, text_y), f"Место в клане: {pos_str}", font=text_font, fill=(220, 220, 220))
 
     # Небольшая иконка ранга слева от текста Elo
     icon_x = bx
