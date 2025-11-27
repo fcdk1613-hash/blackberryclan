@@ -1068,16 +1068,37 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         fill=(220, 220, 220),
     )
     stats_y += 30
+   # Очки захвата
     draw.text(
         (stats_x, stats_y),
         f"Очки захвата (сумма): {caps}",
         font=text_font,
         fill=(220, 220, 220),
     )
-    stats_y += 30
-    mvp_line = f"👑 MVP в КВ: {mvp_count} раз(а)" if mvp_count else "👑 MVP в КВ: —"
+
+    # Смещаем MVP чуть ниже
+    stats_y += 40
+
+    # === MVP ICON ===
+    try:
+        mvp_icon = Image.open("icons/mvp.png").convert("RGBA")
+        mvp_icon = mvp_icon.resize((32, 32))  # маленькая иконка
+        card.paste(mvp_icon, (stats_x, stats_y), mvp_icon)
+    except Exception:
+        # Если иконка не загрузилась — fallback на эмодзи
+        draw.text(
+            (stats_x, stats_y),
+            "👑",
+            font=text_font,
+            fill=(220, 220, 220),
+        )
+
+    # Текст справа от иконки
+    mvp_text_x = stats_x + 40  # небольшое смещение вправо от иконки
+    mvp_line = f"MVP в КВ: {mvp_count} раз(а)" if mvp_count else "MVP в КВ: —"
+
     draw.text(
-        (stats_x, stats_y),
+        (mvp_text_x, stats_y + 5),
         mvp_line,
         font=text_font,
         fill=(220, 220, 220),
