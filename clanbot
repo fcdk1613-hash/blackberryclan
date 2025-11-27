@@ -150,6 +150,19 @@ CREATE TABLE IF NOT EXISTS cw_registrations (
     PRIMARY KEY (war_id, user_id),
     FOREIGN KEY (war_id) REFERENCES cw_wars(id) ON DELETE CASCADE
 );
+CREATE_CW_PLAYER_STATS_SQL = """
+CREATE TABLE IF NOT EXISTS cw_player_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    war_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    revives INTEGER NOT NULL,
+    kills INTEGER NOT NULL,
+    deaths INTEGER NOT NULL,
+    caps INTEGER NOT NULL,
+    elo_delta REAL NOT NULL,
+    FOREIGN KEY (war_id) REFERENCES cw_wars(id) ON DELETE CASCADE
+);
+"""
 """
 CREATE_MOD_ACTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS mod_actions (
@@ -303,6 +316,7 @@ async def init_db():
         await db.execute(CREATE_REMOVE_TABLE_SQL)
         await db.execute(CREATE_CW_WARS_SQL)
         await db.execute(CREATE_CW_REGS_SQL)
+        await db.execute(CREATE_CW_PLAYER_STATS_SQL)  # <-- НОВОЕ
         await db.execute(CREATE_MOD_ACTIONS_SQL)
         await db.execute(CREATE_RATING_CHANGES_SQL)
         # Migrations
@@ -446,6 +460,8 @@ class CWStatsState(StatesGroup):
     waiting_deaths = State()
     waiting_caps = State()
 
+class CWViewStatsState(StatesGroup):
+    waiting_war_id = State()
 
 class ReserveUntilState(StatesGroup):
     waiting_date = State()
@@ -857,6 +873,32 @@ async def CW_list_finished(limit: int = 20) -> list:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in rows]
 
+async def CW_player_stats_for_war(war_id: int) -> list[dict]:
+    """
+    Возвращает список игроков по конкретному КВ с подробной статистикой,
+    отсортированный по elo_delta (столбец +BBP).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT s.user_id,
+                   s.revives,
+                   s.kills,
+                   s.deaths,
+                   s.caps,
+                   s.elo_delta,
+                   u.nickname
+            FROM cw_player_stats AS s
+            LEFT JOIN users AS u ON u.user_id = s.user_id
+            WHERE s.war_id = ?
+            ORDER BY s.elo_delta DESC
+            """,
+            (war_id,),
+        )
+        rows = await cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
+
 async def CW_registrations(war_id: int) -> list[int]:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT user_id FROM cw_registrations WHERE war_id=? ORDER BY created_at ASC", (war_id,))
@@ -996,7 +1038,18 @@ async def CW_finish(war_id: int, winner_label: str, per_player_stats=None) -> bo
 
             delta = new_elo - old_elo
             if delta != 0:
-                await log_rating_change(uid, delta, reason=f"cw_win_war_{war_id}")
+                await log_rating_change(uid, delta, reason=f"cw:{war_id}")
+
+            # --- Сохраняем постатейную статистику именно для этого КВ ---
+            await db.execute(
+                """
+                INSERT INTO cw_player_stats
+                    (war_id, user_id, revives, kills, deaths, caps, elo_delta)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (war_id, uid, revives, kills, deaths, caps, total_delta),
+            )
+
             await notify_rank_if_changed(uid, old_elo, new_elo)
 
             # MVP считаем только если победитель Blackberry
@@ -3704,6 +3757,106 @@ async def CW_admin_finish_ask(call: CallbackQuery):
     await call.message.answer("Укажите победителя:", reply_markup=kb.adjust(1).as_markup())
     await call.answer()
 
+@dp.callback_query(F.data == "cw:results")
+async def cw_results_request(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+@dp.message(CWViewStatsState.waiting_war_id)
+async def cw_show_match_stats(message: Message, state: FSMContext):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("ID КВ должен быть числом. Введите ID ещё раз:")
+        return
+
+    war_id = int(raw)
+    war = await CW_get_war(war_id)
+    if not war:
+        await message.answer("КВ с таким ID не найдено.")
+        await state.clear()
+        return
+
+    if war.get("status") != "finished":
+        await message.answer("Это КВ ещё не завершено, подробной статистики нет.")
+        await state.clear()
+        return
+
+    stats_rows = await CW_player_stats_for_war(war_id)
+    if not stats_rows:
+        await message.answer(
+            "Подробная статистика по этому КВ не найдена.\n"
+            "Возможно, оно было завершено до обновления бота."
+        )
+        await state.clear()
+        return
+
+    # Лучший игрок — первый в списке (максимальный elo_delta / +BBP)
+    best = stats_rows[0]
+    best_user = await get_user(best["user_id"])
+    best_name = display_name(
+        best_user,
+        fallback_fullname=best.get("nickname") or str(best["user_id"]),
+    )
+
+    # Общая информация о КВ
+    lines: list[str] = []
+    lines.append(f"<b>КВ #{war_id}</b>")
+    lines.append(f"⚔ Противник: {war['opponents']}")
+    lines.append(f"⏰ Время: {format_cw_datetime(war['starts_at'])}")
+    lines.append(f"🗺 Карта: {war.get('map') or '-'}")
+    lines.append(f"☠ Команда: {war.get('team_size')}")
+    lines.append(f"📢 Правила: {war.get('rules') or '-'}")
+    lines.append(f"🔌 Сервер: {war.get('server') or '-'}")
+    lines.append(f"🏁 Результат: победитель {war.get('winner') or '—'}")
+    lines.append("")
+    lines.append(f"<b>Лучший игрок</b> — {best_name}")
+    lines.append("")
+
+    # Таблица игроков
+    lines.append("<b>Таблица игроков</b>")
+    lines.append("<code>")
+    # Заголовок таблицы
+    lines.append(f"{'Ник':20} {'Raising':7} {'Kill':4} {'Death':5} {'Points':6} {'+BBP':7}")
+
+    for row in stats_rows:
+        u = await get_user(row["user_id"])
+        name = display_name(
+            u,
+            fallback_fullname=row.get("nickname") or str(row["user_id"]),
+        )
+        name_cut = name[:20]
+        revives = row["revives"]
+        kills = row["kills"]
+        deaths = row["deaths"]
+        caps = row["caps"]
+        elo_delta = row["elo_delta"]
+
+        # Форматируем строку таблицы
+        lines.append(
+            f"{name_cut:20} "
+            f"{revives:7} "
+            f"{kills:4} "
+            f"{deaths:5} "
+            f"{caps:6} "
+            f"{elo_delta:+7.1f}"
+        )
+
+    lines.append("</code>")
+
+    await message.answer("\n".join(lines))
+    await state.clear()
+
+    # Просим ввести ID КВ
+    await call.message.answer("Введите ID матча (ID КВ), результаты которого нужно показать:")
+    await state.set_state(CWViewStatsState.waiting_war_id)
+    await call.answer()
+
 @dp.callback_query(F.data.startswith("cw:finishset:"))
 async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -3861,16 +4014,36 @@ async def cw_stats_caps(message: Message, state: FSMContext):
 @dp.message(Command("cw_stats"))
 async def CW_cmd_stats(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
-        await message.answer("Только модераторы/администраторы."); return
+        await message.answer("Только модераторы/администраторы.")
+        return
+
     rows = await CW_list_finished(limit=50)
     if not rows:
-        await message.answer("Прошедших КВ пока нет."); return
+        await message.answer("Прошедших КВ пока нет.")
+        return
+
     lines = ["<b>Статистика КВ — прошедшие</b>"]
     kb = InlineKeyboardBuilder()
+
     for w in rows:
         res = w.get("winner") or "—"
-        lines.append(f"• {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: победитель {res}")
-        kb.button(text=f"🗑 Удалить {w['id']}", callback_data=f"cw:delete:{w['id']}")
+        # Добавляем ID КВ в строку
+        lines.append(
+            f"• ID <b>{w['id']}</b>: {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: победитель {res}"
+        )
+        # Кнопка удаления КВ оставляем как было
+        kb.button(
+            text=f"🗑 Удалить {w['id']}",
+            callback_data=f"cw:delete:{w['id']}",
+        )
+
+    # Ниже списка — отдельная кнопка "Результаты матчей"
+    kb.row()
+    kb.button(
+        text="📊 Результаты матчей",
+        callback_data="cw:results",
+    )
+
     await message.answer("\n".join(lines), reply_markup=kb.adjust(1).as_markup())
 # ======= Admin Menu (/amenu) & Find Player flow =======
 class FindPlayerState(StatesGroup):
