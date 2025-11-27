@@ -3757,11 +3757,15 @@ async def CW_admin_finish_ask(call: CallbackQuery):
     await call.message.answer("Укажите победителя:", reply_markup=kb.adjust(1).as_markup())
     await call.answer()
 
-@dp.callback_query(F.data == "cw:results")
+@dp.callback_query(F.data == "cw_results")
 async def cw_results_request(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Недостаточно прав.", show_alert=True)
         return
+
+    await call.message.answer("Введите ID матча (ID КВ), результаты которого нужно показать:")
+    await state.set_state(CWViewStatsState.waiting_war_id)
+    await call.answer()
 
 @dp.message(CWViewStatsState.waiting_war_id)
 async def cw_show_match_stats(message: Message, state: FSMContext):
@@ -3796,7 +3800,7 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Лучший игрок — первый в списке (максимальный elo_delta / +BBP)
+    # Лучший игрок — первый в списке (максимальный +BBP / elo_delta)
     best = stats_rows[0]
     best_user = await get_user(best["user_id"])
     best_name = display_name(
@@ -3804,7 +3808,6 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
         fallback_fullname=best.get("nickname") or str(best["user_id"]),
     )
 
-    # Общая информация о КВ
     lines: list[str] = []
     lines.append(f"<b>КВ #{war_id}</b>")
     lines.append(f"⚔ Противник: {war['opponents']}")
@@ -3817,11 +3820,8 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
     lines.append("")
     lines.append(f"<b>Лучший игрок</b> — {best_name}")
     lines.append("")
-
-    # Таблица игроков
     lines.append("<b>Таблица игроков</b>")
     lines.append("<code>")
-    # Заголовок таблицы
     lines.append(f"{'Ник':20} {'Raising':7} {'Kill':4} {'Death':5} {'Points':6} {'+BBP':7}")
 
     for row in stats_rows:
@@ -3837,7 +3837,6 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
         caps = row["caps"]
         elo_delta = row["elo_delta"]
 
-        # Форматируем строку таблицы
         lines.append(
             f"{name_cut:20} "
             f"{revives:7} "
