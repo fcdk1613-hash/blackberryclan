@@ -4698,25 +4698,26 @@ async def find_player_query(message: Message, state: FSMContext):
 
     if not target_user:
         await message.answer("Пользователь не найден.")
+        await state.clear()
         return
 
-    # История турниров (нужна и для картинки, и для текстового профиля)
+    # История турниров и позиция игрока
     user_id_int = int(target_user.get("user_id"))
     history = await get_tournament_history(user_id_int)
+    pos = await get_player_position(user_id_int)
 
-    # Картинка профиля без лишнего текста (только изображение)
-    image_path = generate_profile_card_image(target_user, history=history, pos=None)
+    # Картинка профиля (как у /profile)
+    image_path = generate_profile_card_image(target_user, history=history, pos=pos)
     await message.answer_photo(
         photo=FSInputFile(image_path)
     )
 
-    # Дальше — как было изначально: один текстовый профиль с кнопками
+    # Один текстовый профиль с кнопками (без дублей)
     await message.answer(
-        format_profile(target_user, history=history),
+        format_profile(target_user, history=history, pos=pos),
         reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
     )
 
-    await message.answer(format_profile(target_user, history=await get_tournament_history(int(target_user.get("user_id")))), reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id))
     await state.clear()
 
 if __name__ == "__main__":
