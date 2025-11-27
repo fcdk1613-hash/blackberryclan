@@ -916,13 +916,13 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     title_text = f"{rank_badge} {nickname}"
     draw.text((x, y), title_text, font=title_font, fill=(255, 255, 255))
 
-y += 60
-draw.text(
-    (x, y),
-    f"Фракция: {faction}",
-    font=subtitle_font,
-    fill=(220, 220, 220),
-)
+    y += 60
+    draw.text(
+        (x, y),
+        f"Фракция: {faction}",
+        font=subtitle_font,
+        fill=(220, 220, 220),
+    )
     # Блок Elo / ранга в правом верхнем углу
     elo_block_x = panel_x1 - 280
     elo_block_y = panel_y0 + 40
