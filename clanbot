@@ -1418,7 +1418,6 @@ def generate_cw_result_image(
     draw.text((title_x, title_y), title, font=title_font, fill=(230, 220, 255))
 
     # --- логотипы кланов + счёт между ними ---
-
     def load_logo(filename: str, size: int) -> Image.Image | None:
         path = os.path.join(icons_dir, filename)
         try:
@@ -1431,7 +1430,7 @@ def generate_cw_result_image(
         return None
 
     logo_size = 150
-    bb_logo = load_logo("logo.png", logo_size)           # <-- тут logo.png
+    bb_logo = load_logo("logo.png", logo_size)           # логотип BB
     opp_logo = load_logo("opponent.png", logo_size)
 
     score_text = f"{bb_score} : {opp_score}"
@@ -1442,21 +1441,17 @@ def generate_cw_result_image(
     band_top = title_y + title_h + 40
     mid_x = (panel_x0 + panel_x1) // 2
 
-    # отступ между счётом и логотипом
     logo_margin = 60
-    # центр логотипа от центра счёта
     logo_offset = score_w / 2 + logo_margin + logo_size / 2
 
-    # положение по вертикали для логотипов и счёта
     logo_center_y = band_top + logo_size / 2
     logos_y = int(logo_center_y - logo_size / 2)
     score_y = int(logo_center_y - score_h / 2)
 
-    # центры логотипов
     left_center_x = int(mid_x - logo_offset)
     right_center_x = int(mid_x + logo_offset)
 
-    # рисуем логотипы без подложек
+    # логотипы без подложек
     if bb_logo is not None:
         img.paste(bb_logo, (left_center_x - logo_size // 2, logos_y), bb_logo)
     if opp_logo is not None:
@@ -1466,50 +1461,9 @@ def generate_cw_result_image(
     score_x = mid_x - score_w // 2
     draw.text((score_x, score_y), score_text, font=score_font, fill=(245, 230, 255))
 
-    # маленький текст "XXX очков" под логотипами
-    scores_y = logos_y + logo_size + 8
-    bb_small = f"{bb_score} очков"
-    opp_small = f"{opp_score} очков"
+    # --- НИЖЕ под логотипами ничего не пишем (ни "376 очков", ни "Победа ...") ---
 
-    bb_small_bbox = draw.textbbox((0, 0), bb_small, font=small_font)
-    bb_small_w = bb_small_bbox[2] - bb_small_bbox[0]
-    opp_small_bbox = draw.textbbox((0, 0), opp_small, font=small_font)
-    opp_small_w = opp_small_bbox[2] - opp_small_bbox[0]
-
-    draw.text(
-        (left_center_x - bb_small_w / 2, scores_y),
-        bb_small,
-        font=small_font,
-        fill=(200, 255, 200),
-    )
-    draw.text(
-        (right_center_x - opp_small_w / 2, scores_y),
-        opp_small,
-        font=small_font,
-        fill=(255, 200, 200),
-    )
-
-    # --- "Победа ..." немного ниже ---
-    winner_label = (war.get("winner") or "").strip()
-    winner_y = scores_y + 25
-    if winner_label:
-        wl = winner_label.lower()
-        if wl.startswith("black"):
-            winner_line = "Победа Blackberry"
-            win_color = (180, 255, 200)
-        elif "против" in wl or "opponent" in wl:
-            winner_line = "Победа противника"
-            win_color = (255, 190, 190)
-        else:
-            winner_line = winner_label
-            win_color = (230, 230, 230)
-
-        winner_bbox = draw.textbbox((0, 0), winner_line, font=small_font)
-        winner_w = winner_bbox[2] - winner_bbox[0]
-        winner_x = panel_x0 + (panel_x1 - panel_x0 - winner_w) // 2
-        draw.text((winner_x, winner_y), winner_line, font=small_font, fill=win_color)
-
-    # --- блок MVP (без TG ника) ---
+    # --- блок MVP (чуть выше и крупнее, без TG ника) ---
     # режем телеграм-ник в формате " (@xxx)" в конце строки
     if mvp_name:
         mvp_clean = re.sub(r"\s*\(@[^)]*\)\s*$", "", mvp_name.strip())
@@ -1517,8 +1471,9 @@ def generate_cw_result_image(
         mvp_clean = "—"
 
     mvp_block_x = panel_x0 + 40
-    mvp_block_y = panel_y1 - 130
-    mvp_icon_size = 48
+    # поднимем MVP выше, ближе к центру
+    mvp_block_y = panel_y1 - 190
+    mvp_icon_size = 60  # было 48
 
     try:
         mvp_icon_path = os.path.join(icons_dir, "mvp.png")
@@ -1536,14 +1491,14 @@ def generate_cw_result_image(
         draw.text(
             (mvp_block_x, mvp_block_y),
             "👑",
-            font=small_font,
+            font=name_font,
             fill=(230, 220, 255),
         )
 
     mvp_text = f"MVP: {mvp_clean}"
     max_mvp_width = (panel_x1 - panel_x0) // 2
-    if draw.textlength(mvp_text, font=small_font) > max_mvp_width:
-        while len(mvp_text) > 5 and draw.textlength(mvp_text + "...", font=small_font) > max_mvp_width:
+    if draw.textlength(mvp_text, font=name_font) > max_mvp_width:
+        while len(mvp_text) > 5 and draw.textlength(mvp_text + "...", font=name_font) > max_mvp_width:
             mvp_text = mvp_text[:-1]
         mvp_text += "..."
 
@@ -1552,11 +1507,11 @@ def generate_cw_result_image(
     draw.text(
         (mvp_text_x, mvp_text_y),
         mvp_text,
-        font=small_font,
+        font=name_font,   # крупнее, чем small_font
         fill=(230, 220, 255),
     )
 
-       # --- блок карты справа внизу ---
+    # --- блок карты справа внизу ---
     map_name = (war.get("map") or "").strip() or "Неизвестная карта"
     map_block_width = 420
     map_block_height = 200
@@ -1586,7 +1541,7 @@ def generate_cw_result_image(
     img = Image.alpha_composite(img, map_layer)
     draw = ImageDraw.Draw(img)
 
-    # --- внутренняя рамка под картинку карты (закруглённые углы) ---
+    # внутренняя рамка под картинку карты (закруглённые углы)
     inner_margin_x = 20
     inner_margin_top = 15
     text_area_height = 40  # место снизу под название карты
@@ -1599,7 +1554,6 @@ def generate_cw_result_image(
     inner_w = inner_x1 - inner_x0
     inner_h = inner_y1 - inner_y0
 
-    # загружаем логотип карты и делаем его крупнее (под размер inner_w x inner_h)
     lower_map = map_name.lower()
     map_logo_file = None
     map_logo_map = {
@@ -1623,19 +1577,15 @@ def generate_cw_result_image(
         except Exception:
             map_logo = None
 
-    # создаём внутреннюю картинку с закруглёнными углами
     if map_logo is not None:
-        # подгоняем под внутренний прямоугольник, максимально крупно
         logo = map_logo.copy()
         logo.thumbnail((inner_w, inner_h), Image.LANCZOS)
 
-        # полотно под карту
         inner_img = Image.new("RGBA", (inner_w, inner_h), (10, 5, 35, 255))
         lx = (inner_w - logo.size[0]) // 2
         ly = (inner_h - logo.size[1]) // 2
         inner_img.paste(logo, (lx, ly), logo)
 
-        # маска с закруглённым прямоугольником
         mask = Image.new("L", (inner_w, inner_h), 0)
         mask_draw = ImageDraw.Draw(mask)
         try:
@@ -1647,10 +1597,9 @@ def generate_cw_result_image(
         except Exception:
             mask_draw.rectangle((0, 0, inner_w, inner_h), fill=255)
 
-        # вставляем в основное изображение
         img.paste(inner_img, (inner_x0, inner_y0), mask)
 
-    # --- название карты по центру внизу блока ---
+    # название карты по центру внизу блока
     max_map_text_width = map_block_width - 40
     map_line = map_name
     if draw.textlength(map_line, font=small_font) > max_map_text_width:
