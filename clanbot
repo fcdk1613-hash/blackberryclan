@@ -1766,12 +1766,6 @@ async def CW_finish(
     bb_score: int | None = None,
     opp_score: int | None = None,
 ) -> bool:
-    """
-   # Завершение КВ:
-   # - всегда считает/копит статистику (поднятия, kills/deaths, очки захвата);
-   # - базовый ELO за победу/поражение — как было;
-   # - дополнительный ELO за статистику и MVP — ТОЛЬКО при победе Blackberry.
-   # """
     war = await CW_get_war(war_id)
     if not war or war.get("status") != "scheduled":
         return False
@@ -1779,7 +1773,11 @@ async def CW_finish(
     regs = await CW_registrations(war_id)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE cw_wars SET winner=?, status='finished', bb_score=COALESCE(?, bb_score), opp_score=COALESCE(?, opp_score) WHERE id=?",
+            "UPDATE cw_wars "
+            "SET winner=?, status='finished', "
+            "    bb_score=COALESCE(?, bb_score), "
+            "    opp_score=COALESCE(?, opp_score) "
+            "WHERE id=?",
             (winner_label, bb_score, opp_score, war_id),
         )
 
@@ -1790,7 +1788,7 @@ async def CW_finish(
             before = await get_user(uid)
             old_elo = (before.get("elo_rating") if before else None) or 1000
 
-            # --- Базовый ELO за результат КВ (как раньше) ---
+            # --- базовый ELO ---
             if winner_label == "Blackberry":
                 if old_elo < 1500:
                     base_delta = 100
@@ -1801,7 +1799,6 @@ async def CW_finish(
                 cw_win_inc = 1
                 cw_loss_inc = 0
             else:
-                # Победитель Противник – только штраф
                 if old_elo >= 3000:
                     base_delta = -100
                 elif old_elo >= 2000:
@@ -1811,39 +1808,36 @@ async def CW_finish(
                 cw_win_inc = 0
                 cw_loss_inc = 1
 
-            # --- Статистика всегда читается и копится в профиле ---
+            # --- статы из per_player_stats ---
             stats_for_user = (per_player_stats or {}).get(str(uid)) or {}
             revives = int(stats_for_user.get("revives", 0) or 0)
-            kills = int(stats_for_user.get("kills", 0) or 0)
-            deaths = int(stats_for_user.get("deaths", 0) or 0)
-            caps = int(stats_for_user.get("caps", 0) or 0)
+            kills   = int(stats_for_user.get("kills", 0) or 0)
+            deaths  = int(stats_for_user.get("deaths", 0) or 0)
+            caps    = int(stats_for_user.get("caps", 0) or 0)
 
-            # --- Личный ELO за статы только при победе Blackberry ---
+            # --- личный ELO только при победе BB ---
             personal_elo = 0.0
             if winner_label == "Blackberry":
-                # 1 поднятие = 0.5 ELO
                 personal_elo += revives * 0.5
-                # kills - deaths = 1 ELO за единицу, если > 0
                 kd_diff = kills - deaths
                 if kd_diff > 0:
                     personal_elo += kd_diff
-                # 1 очко захвата = 0.01 ELO
                 personal_elo += caps * 0.005
 
             total_delta = base_delta + personal_elo
 
-            # Обновляем пользователя: win/loss + статы + ELO
+            # обновляем пользователя
             await db.execute(
                 """
                 UPDATE users
                 SET
-                    cw_wins = COALESCE(cw_wins, 0) + ?,
-                    cw_losses = COALESCE(cw_losses, 0) + ?,
-                    cw_revives = COALESCE(cw_revives, 0) + ?,
-                    cw_kills = COALESCE(cw_kills, 0) + ?,
-                    cw_deaths = COALESCE(cw_deaths, 0) + ?,
-                    cw_capture_points = COALESCE(cw_capture_points, 0) + ?,
-                    elo_rating = COALESCE(elo_rating, 1000) + ?
+                    cw_wins            = COALESCE(cw_wins, 0) + ?,
+                    cw_losses          = COALESCE(cw_losses, 0) + ?,
+                    cw_revives         = COALESCE(cw_revives, 0) + ?,
+                    cw_kills           = COALESCE(cw_kills, 0) + ?,
+                    cw_deaths          = COALESCE(cw_deaths, 0) + ?,
+                    cw_capture_points  = COALESCE(cw_capture_points, 0) + ?,
+                    elo_rating         = COALESCE(elo_rating, 1000) + ?
                 WHERE user_id = ?
                 """,
                 (
@@ -1858,53 +1852,48 @@ async def CW_finish(
                 ),
             )
 
-        # --- Новый ELO после всех начислений ---
-        cur = await db.execute(
-            "SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?",
-            (uid,),
-        )
-        row = await cur.fetchone()
-        new_elo = row[0] if row and row[0] is not None else 1000
+            # --- новый ELO и лог изменения рейтинга (УЖЕ ВНУТРИ ЦИКЛА) ---
+            cur = await db.execute(
+                "SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?",
+                (uid,),
+            )
+            row = await cur.fetchone()
+            new_elo = row[0] if row and row[0] is not None else 1000
 
-        delta = new_elo - old_elo
+            delta = new_elo - old_elo
+            if delta != 0:
+                await db.execute(
+                    """
+                    INSERT INTO rating_changes(user_id, delta, reason, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        int(uid),
+                        int(delta),
+                        f"cw:{war_id}",
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
 
-        # --- Логируем изменение рейтинга в той же транзакции ---
-        if delta != 0:
+            await notify_rank_if_changed(uid, old_elo, new_elo)
+
+            # --- Сохраняем статистику игрока для этого КВ (ТОЖЕ ВНУТРИ ЦИКЛА) ---
             await db.execute(
                 """
-                INSERT INTO rating_changes(user_id, delta, reason, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO cw_player_stats
+                    (war_id, user_id, revives, kills, deaths, caps, elo_delta)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    int(uid),
-                    int(delta),
-                    f"cw:{war_id}",
-                    datetime.utcnow().isoformat(),
-                ),
+                (war_id, uid, revives, kills, deaths, caps, total_delta),
             )
 
-        # --- Проверяем повышение/понижение ранга ---
-        await notify_rank_if_changed(uid, old_elo, new_elo)
+            # MVP-кандидат
+            if winner_label == "Blackberry" and per_player_stats:
+                if mvp_elo_gain is None or total_delta > mvp_elo_gain:
+                    mvp_elo_gain = total_delta
+                    mvp_user_id = uid
 
-        # --- Сохраняем статистику игрока для этого КВ ---
-        await db.execute(
-            """
-            INSERT INTO cw_player_stats
-                (war_id, user_id, revives, kills, deaths, caps, elo_delta)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (war_id, uid, revives, kills, deaths, caps, total_delta),
-        )
-
-        await notify_rank_if_changed(uid, old_elo, new_elo)
-
-        # MVP считаем только если победитель Blackberry
-        if winner_label == "Blackberry" and per_player_stats:
-            if mvp_elo_gain is None or total_delta > mvp_elo_gain:
-                mvp_elo_gain = total_delta
-                mvp_user_id = uid
-
-        # Обновляем MVP игрока только если победитель Blackberry
+        # после цикла — один UPDATE по MVP
         if winner_label == "Blackberry" and mvp_user_id is not None:
             await db.execute(
                 """
