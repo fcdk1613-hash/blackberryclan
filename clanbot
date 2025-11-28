@@ -1556,7 +1556,7 @@ def generate_cw_result_image(
         fill=(230, 220, 255),
     )
 
-    # --- блок карты справа внизу ---
+       # --- блок карты справа внизу ---
     map_name = (war.get("map") or "").strip() or "Неизвестная карта"
     map_block_width = 420
     map_block_height = 200
@@ -1565,6 +1565,7 @@ def generate_cw_result_image(
     map_block_x1 = map_block_x0 + map_block_width
     map_block_y1 = map_block_y0 + map_block_height
 
+    # внешний блок
     map_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     map_draw = ImageDraw.Draw(map_layer)
     try:
@@ -1585,7 +1586,20 @@ def generate_cw_result_image(
     img = Image.alpha_composite(img, map_layer)
     draw = ImageDraw.Draw(img)
 
-    # логотип карты (если есть) + название по центру рамки
+    # --- внутренняя рамка под картинку карты (закруглённые углы) ---
+    inner_margin_x = 20
+    inner_margin_top = 15
+    text_area_height = 40  # место снизу под название карты
+
+    inner_x0 = map_block_x0 + inner_margin_x
+    inner_x1 = map_block_x1 - inner_margin_x
+    inner_y0 = map_block_y0 + inner_margin_top
+    inner_y1 = map_block_y1 - text_area_height
+
+    inner_w = inner_x1 - inner_x0
+    inner_h = inner_y1 - inner_y0
+
+    # загружаем логотип карты и делаем его крупнее (под размер inner_w x inner_h)
     lower_map = map_name.lower()
     map_logo_file = None
     map_logo_map = {
@@ -1601,23 +1615,44 @@ def generate_cw_result_image(
             break
 
     map_logo = None
-    logo_w = logo_h = 0
     if map_logo_file is not None:
         try:
             logo_path = os.path.join(icons_dir, map_logo_file)
             if os.path.exists(logo_path):
                 map_logo = Image.open(logo_path).convert("RGBA")
-                max_logo_width = map_block_width - 40
-                max_logo_height = 80
-                map_logo.thumbnail((max_logo_width, max_logo_height), Image.LANCZOS)
-                logo_w, logo_h = map_logo.size
         except Exception:
             map_logo = None
-            logo_w = logo_h = 0
 
-    # считаем общую высоту содержимого в рамке
-    map_line = map_name
+    # создаём внутреннюю картинку с закруглёнными углами
+    if map_logo is not None:
+        # подгоняем под внутренний прямоугольник, максимально крупно
+        logo = map_logo.copy()
+        logo.thumbnail((inner_w, inner_h), Image.LANCZOS)
+
+        # полотно под карту
+        inner_img = Image.new("RGBA", (inner_w, inner_h), (10, 5, 35, 255))
+        lx = (inner_w - logo.size[0]) // 2
+        ly = (inner_h - logo.size[1]) // 2
+        inner_img.paste(logo, (lx, ly), logo)
+
+        # маска с закруглённым прямоугольником
+        mask = Image.new("L", (inner_w, inner_h), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        try:
+            mask_draw.rounded_rectangle(
+                (0, 0, inner_w, inner_h),
+                radius=20,
+                fill=255,
+            )
+        except Exception:
+            mask_draw.rectangle((0, 0, inner_w, inner_h), fill=255)
+
+        # вставляем в основное изображение
+        img.paste(inner_img, (inner_x0, inner_y0), mask)
+
+    # --- название карты по центру внизу блока ---
     max_map_text_width = map_block_width - 40
+    map_line = map_name
     if draw.textlength(map_line, font=small_font) > max_map_text_width:
         while len(map_line) > 5 and draw.textlength(map_line + "...", font=small_font) > max_map_text_width:
             map_line = map_line[:-1]
@@ -1627,23 +1662,11 @@ def generate_cw_result_image(
     map_text_w = map_text_bbox[2] - map_text_bbox[0]
     map_text_h = map_text_bbox[3] - map_text_bbox[1]
 
-    spacing = 10 if map_logo is not None else 0
-    total_h = logo_h + spacing + map_text_h
-    start_y = map_block_y0 + (map_block_height - total_h) // 2
-
-    # картинка карты
-    if map_logo is not None:
-        logo_x = map_block_x0 + (map_block_width - logo_w) // 2
-        logo_y = start_y
-        img.paste(map_logo, (logo_x, logo_y), map_logo)
-        text_y = logo_y + logo_h + spacing
-    else:
-        text_y = start_y
-
-    # название карты по центру
     map_text_x = map_block_x0 + (map_block_width - map_text_w) // 2
+    map_text_y = map_block_y1 - text_area_height + (text_area_height - map_text_h) // 2
+
     draw.text(
-        (map_text_x, text_y),
+        (map_text_x, map_text_y),
         map_line,
         font=small_font,
         fill=(230, 220, 255),
@@ -1658,7 +1681,6 @@ def generate_cw_result_image(
     img.save(full_path, "PNG")
 
     return full_path
-
 def display_name(user: dict | None, fallback_fullname: str | None = None) -> str:
     try:
         nick = (user.get("nickname") if user else None) or (fallback_fullname or "")
