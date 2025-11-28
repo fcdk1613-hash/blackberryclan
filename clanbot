@@ -1822,7 +1822,7 @@ async def CW_finish(
                 kd_diff = kills - deaths
                 if kd_diff > 0:
                     personal_elo += kd_diff
-                personal_elo += caps * 0.005
+                personal_elo += caps * 0.0025
 
             total_delta = base_delta + personal_elo
 
