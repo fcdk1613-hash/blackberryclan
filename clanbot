@@ -1130,10 +1130,10 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
 
     return full_path
 
-def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int]]) -> str:
+def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int, str]]) -> str:
     """
     Генерирует вертикальную PNG-картинку ТОП-20 игроков.
-    entries: список кортежей (place, nickname, elo, delta_elo)
+    entries: список кортежей (place, nickname, elo, delta_elo, rank_name)
     Возвращает путь к сохранённому файлу.
     """
     width = 900
@@ -1198,17 +1198,17 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int]]) -> 
     img = Image.alpha_composite(img, panel_layer)
     draw = ImageDraw.Draw(img)
 
-    # Заголовок
+    # Заголовок (чуть выше, чтобы вся таблица попала в рамку)
     title = "ТОП-20 игроков клана"
     title_x = panel_x0 + 40
-    title_y = panel_y0 + 30
+    title_y = panel_y0 + 20  # было ~+30, подняли ближе к верху панели
     draw.text((title_x, title_y), title, font=title_font, fill=(255, 255, 255))
 
     # Заголовки колонок
-    col_y = title_y + 70
+    col_y = title_y + 55  # было +70, поднимаем таблицу выше
     col_no_x = panel_x0 + 40
     col_rank_x = col_no_x + 60
-    col_name_x = col_rank_x + 65
+    col_name_x = col_rank_x + 90   # смещаем "Ник" правее
     col_elo_x = panel_x1 - 260
     col_delta_x = panel_x1 - 130
 
@@ -1223,7 +1223,6 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int]]) -> 
     try:
         up_path = os.path.join(icons_dir, "up.png")
         down_path = os.path.join(icons_dir, "down.png")
-        ranks_dir = os.path.join(icons_dir, "ranks")
         icon_size = (24, 24)
 
         if os.path.exists(up_path):
@@ -1233,31 +1232,26 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int]]) -> 
     except Exception:
         up_icon = down_icon = None
 
-   # Строки таблицы
-    y = col_y + 40
+    # Строки таблицы (БЕЗ белой заливки для чётных строк)
+    y = col_y + 30   # было +40, поднимаем строки ближе к заголовкам
     for place, nickname, elo, delta, rank_name in entries:
-        # Зебра-фон для чётных строк
-        if place % 2 == 0:
-            row_bg = (255, 255, 255, 20)
-            draw.rectangle(
-                (panel_x0 + 20, y - 4, panel_x1 - 20, y + row_height - 6),
-                fill=row_bg,
-            )
-
-        # Место
+        # Номер места
         draw.text((col_no_x, y), f"{place}", font=row_font, fill=(230, 230, 230))
 
         # Иконка ранга
-        rank_icon_path = os.path.join(ranks_dir, f"{rank_name.lower()}.png")
-        try:
-            if os.path.exists(rank_icon_path):
-                rank_icon = Image.open(rank_icon_path).convert("RGBA").resize((32, 32), Image.LANCZOS)
+        rank_icon_path = get_rank_icon_path(rank_name)
+        if rank_icon_path:
+            try:
+                rank_icon = Image.open(rank_icon_path).convert("RGBA").resize((28, 28), Image.LANCZOS)
                 img.paste(rank_icon, (col_rank_x, y - 4), rank_icon)
-            else:
-                # Фоллбек — первая буква ранга
-                draw.text((col_rank_x, y), rank_name[0], font=row_font, fill=(180, 180, 255))
-        except Exception:
-            draw.text((col_rank_x, y), rank_name[0], font=row_font, fill=(180, 180, 255))
+            except Exception:
+                # если что-то пошло не так — рисуем текстовый бейдж
+                badge = get_rank_badge_text(rank_name)
+                draw.text((col_rank_x, y), badge, font=row_font, fill=(180, 180, 255))
+        else:
+            # Фоллбек, если иконки нет
+            badge = get_rank_badge_text(rank_name)
+            draw.text((col_rank_x, y), badge, font=row_font, fill=(180, 180, 255))
 
         # Ник (обрезаем слишком длинные)
         nick_text = nickname or "—"
@@ -1296,6 +1290,15 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int]]) -> 
                 draw.text((arrow_x, y), "↓", font=row_font, fill=(255, 0, 0))
 
         y += row_height
+
+    # Сохраняем картинку
+    out_dir = os.path.join(base_dir, "leaderboards")
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"top20_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    full_path = os.path.join(out_dir, filename)
+    img.save(full_path, "PNG")
+
+    return full_path
 
     # Сохраняем картинку
     out_dir = os.path.join(base_dir, "leaderboards")
