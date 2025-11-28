@@ -4823,9 +4823,9 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
             photo=FSInputFile(img_path),
             caption="📊 Карточка результатов КВ",
         )
-    except Exception:
-        # если при генерации/отправке картинка упала — не ломаем основной вывод
-        pass
+    except Exception as e:
+        import logging
+        logging.exception("Failed to generate/send CW result image: %s", e)
 
     await state.clear()
 
