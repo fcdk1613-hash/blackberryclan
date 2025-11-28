@@ -4858,18 +4858,6 @@ async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
         cw_moderator_id=call.from_user.id,
     )
 
-    first_uid = regs[0]
-    user = await get_user(first_uid)
-    name = display_name(user, fallback_fullname=str(first_uid))
-
-    await call.message.answer(
-        f"КВ #{war_id}\nПобедитель: {label}\n\n"
-        f"Игрок: {name}\n"
-        f"Введите кол-во поднятий союзников (целое число):"
-    )
-    await state.set_state(CWStatsState.waiting_revives)
-    await call.answer()
-
 @dp.message(CWStatsState.waiting_score)
 async def cw_stats_score(message: Message, state: FSMContext):
     raw = (message.text or "").strip()
@@ -4940,6 +4928,7 @@ async def cw_stats_score(message: Message, state: FSMContext):
         f"Введите кол-во поднятий союзников (целое число):"
     )
     await state.set_state(CWStatsState.waiting_revives)
+    await call.answer()
 
 @dp.message(CWStatsState.waiting_revives)
 async def cw_stats_revives(message: Message, state: FSMContext):
