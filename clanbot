@@ -1322,7 +1322,7 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int, str]]
 
     return full_path
 
-ef generate_cw_result_image(
+def generate_cw_result_image(
     war: dict,
     bb_score: int,
     opp_score: int,
