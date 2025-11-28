@@ -1130,6 +1130,182 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
 
     return full_path
 
+def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int]]) -> str:
+    """
+    Генерирует вертикальную PNG-картинку ТОП-20 игроков.
+    entries: список кортежей (place, nickname, elo, delta_elo)
+    Возвращает путь к сохранённому файлу.
+    """
+    width = 900
+    row_height = 40
+    header_height = 140
+    footer_height = 40
+    rows_count = max(len(entries), 1)
+    height = header_height + row_height * rows_count + footer_height
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    icons_dir = os.path.join(base_dir, "icons")
+
+    # Фон: сначала пытаемся взять top_bg.png, затем profile_bg.png, иначе — однотонный
+    try:
+        bg_path = os.path.join(icons_dir, "top_bg.png")
+        if os.path.exists(bg_path):
+            img = Image.open(bg_path).convert("RGBA").resize((width, height))
+        else:
+            bg_path = os.path.join(icons_dir, "profile_bg.png")
+            img = Image.open(bg_path).convert("RGBA").resize((width, height))
+    except Exception:
+        img = Image.new("RGBA", (width, height), (20, 10, 30, 255))
+
+    draw = ImageDraw.Draw(img)
+
+    # Шрифты
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 42)
+        header_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
+        row_font = ImageFont.truetype("DejaVuSans.ttf", 24)
+    except Exception:
+        title_font = header_font = row_font = ImageFont.load_default()
+
+    # Полупрозрачная панель
+    margin = 30
+    panel_x0 = margin
+    panel_y0 = margin
+    panel_x1 = width - margin
+    panel_y1 = height - margin
+
+    panel_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    panel_draw = ImageDraw.Draw(panel_layer)
+    panel_fill = (10, 10, 20, 200)
+    panel_outline = (140, 80, 255)
+
+    try:
+        panel_draw.rounded_rectangle(
+            (panel_x0, panel_y0, panel_x1, panel_y1),
+            radius=30,
+            fill=panel_fill,
+            outline=panel_outline,
+            width=3,
+        )
+    except Exception:
+        panel_draw.rectangle(
+            (panel_x0, panel_y0, panel_x1, panel_y1),
+            fill=panel_fill,
+            outline=panel_outline,
+            width=3,
+        )
+
+    img = Image.alpha_composite(img, panel_layer)
+    draw = ImageDraw.Draw(img)
+
+    # Заголовок
+    title = "ТОП-20 игроков клана"
+    title_x = panel_x0 + 40
+    title_y = panel_y0 + 30
+    draw.text((title_x, title_y), title, font=title_font, fill=(255, 255, 255))
+
+    # Заголовки колонок
+    col_y = title_y + 70
+    col_no_x = panel_x0 + 40
+    col_rank_x = col_no_x + 60
+    col_name_x = col_rank_x + 65
+    col_elo_x = panel_x1 - 260
+    col_delta_x = panel_x1 - 130
+
+    draw.text((col_no_x, col_y), "№", font=header_font, fill=(200, 200, 255))
+    draw.text((col_rank_x, col_y), "Ранг", font=header_font, fill=(200, 200, 255))
+    draw.text((col_name_x, col_y), "Ник", font=header_font, fill=(200, 200, 255))
+    draw.text((col_elo_x, col_y), "ELO", font=header_font, fill=(200, 200, 255))
+    draw.text((col_delta_x, col_y), "Δ ELO", font=header_font, fill=(200, 200, 255))
+
+    # Иконки стрелок
+    up_icon = down_icon = None
+    try:
+        up_path = os.path.join(icons_dir, "up.png")
+        down_path = os.path.join(icons_dir, "down.png")
+        ranks_dir = os.path.join(icons_dir, "ranks")
+        icon_size = (24, 24)
+
+        if os.path.exists(up_path):
+            up_icon = Image.open(up_path).convert("RGBA").resize(icon_size, Image.LANCZOS)
+        if os.path.exists(down_path):
+            down_icon = Image.open(down_path).convert("RGBA").resize(icon_size, Image.LANCZOS)
+    except Exception:
+        up_icon = down_icon = None
+
+   # Строки таблицы
+    y = col_y + 40
+    for place, nickname, elo, delta, rank_name in entries:
+        # Зебра-фон для чётных строк
+        if place % 2 == 0:
+            row_bg = (255, 255, 255, 20)
+            draw.rectangle(
+                (panel_x0 + 20, y - 4, panel_x1 - 20, y + row_height - 6),
+                fill=row_bg,
+            )
+
+        # Место
+        draw.text((col_no_x, y), f"{place}", font=row_font, fill=(230, 230, 230))
+
+        # Иконка ранга
+        rank_icon_path = os.path.join(ranks_dir, f"{rank_name.lower()}.png")
+        try:
+            if os.path.exists(rank_icon_path):
+                rank_icon = Image.open(rank_icon_path).convert("RGBA").resize((32, 32), Image.LANCZOS)
+                img.paste(rank_icon, (col_rank_x, y - 4), rank_icon)
+            else:
+                # Фоллбек — первая буква ранга
+                draw.text((col_rank_x, y), rank_name[0], font=row_font, fill=(180, 180, 255))
+        except Exception:
+            draw.text((col_rank_x, y), rank_name[0], font=row_font, fill=(180, 180, 255))
+
+        # Ник (обрезаем слишком длинные)
+        nick_text = nickname or "—"
+        if len(nick_text) > 24:
+            nick_text = nick_text[:21] + "..."
+        draw.text((col_name_x, y), nick_text, font=row_font, fill=(255, 255, 255))
+
+        # Текущий ELO
+        draw.text((col_elo_x, y), f"{elo}", font=row_font, fill=(230, 230, 230))
+
+        # Изменение ELO
+        if delta > 0:
+            delta_str = f"+{delta}"
+            delta_color = (180, 255, 180)
+        elif delta < 0:
+            delta_str = str(delta)
+            delta_color = (255, 180, 180)
+        else:
+            delta_str = "0"
+            delta_color = (220, 220, 220)
+
+        draw.text((col_delta_x, y), delta_str, font=row_font, fill=delta_color)
+
+        # Стрелка около изменения
+        arrow_x = col_delta_x - 32
+        arrow_y = y - 2
+        if delta > 0:
+            if up_icon is not None:
+                img.paste(up_icon, (arrow_x, arrow_y), up_icon)
+            else:
+                draw.text((arrow_x, y), "↑", font=row_font, fill=(0, 255, 0))
+        elif delta < 0:
+            if down_icon is not None:
+                img.paste(down_icon, (arrow_x, arrow_y), down_icon)
+            else:
+                draw.text((arrow_x, y), "↓", font=row_font, fill=(255, 0, 0))
+
+        y += row_height
+
+    # Сохраняем картинку
+    out_dir = os.path.join(base_dir, "leaderboards")
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"top20_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    full_path = os.path.join(out_dir, filename)
+    img.save(full_path, "PNG")
+
+    return full_path
+
 def display_name(user: dict | None, fallback_fullname: str | None = None) -> str:
     try:
         nick = (user.get("nickname") if user else None) or (fallback_fullname or "")
@@ -3555,7 +3731,7 @@ def clan_menu_kb() -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="⚔ Клановые войны", callback_data="menu:cw")
     kb.row()
-    kb.button(text="🏆 ТОП-10 игроков клана", callback_data="menu:top10")
+    kb.button(text="🏆 ТОП-20 игроков клана", callback_data="menu:top10")
     kb.row()
     kb.button(text="💤 Перейти в резерв", callback_data="menu:reserve")
     kb.row()
@@ -3578,9 +3754,25 @@ async def CW_menu_list(call: CallbackQuery):
 
 @dp.callback_query(F.data == "menu:top10")
 async def show_top10(call: CallbackQuery):
+    # Берём ТОП-20 по текущему ELO + последнее изменение рейтинга из rating_changes
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT nickname, elo_rating FROM users ORDER BY elo_rating DESC LIMIT 10"
+            """
+            SELECT
+                u.user_id,
+                COALESCE(u.nickname, '') AS nickname,
+                COALESCE(u.elo_rating, 1000) AS elo,
+                COALESCE((
+                    SELECT rc.delta
+                    FROM rating_changes AS rc
+                    WHERE rc.user_id = u.user_id
+                    ORDER BY rc.id DESC
+                    LIMIT 1
+                ), 0) AS last_delta
+            FROM users AS u
+            ORDER BY elo DESC
+            LIMIT 20
+            """
         )
         rows = await cur.fetchall()
 
@@ -3588,15 +3780,21 @@ async def show_top10(call: CallbackQuery):
         await call.answer("Нет данных.", show_alert=True)
         return
 
-    text = "<b>🏆 ТОП-10 игроков клана</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"]
+    # Готовим данные для таблицы: (место, ник, текущий ELO, изменение ELO)
+    entries: list[tuple[int, str, int, int, str]] = []
+    for idx, (user_id, nickname, elo, last_delta) in enumerate(rows, start=1):
+        display_nick = nickname or f"ID {user_id}"
+        rank_name, _ = get_rank(int(elo or 0))
+        entries.append((idx, display_nick, int(elo or 0), int(last_delta or 0), rank_name))
 
-    for i, (nick, elo) in enumerate(rows):
-        rank_name, _ = get_rank(elo)
-        emoji = medals[i] if i < len(medals) else "🏅"
-        text += f"{emoji} <b>{i+1}.</b> {nick} — <code>{elo} BBP</code> ({rank_name})\n"
+    # Генерируем вертикальную картинку ТОП-20
+    image_path = generate_top_leaderboard_image(entries)
 
-    await call.message.answer(text)
+    await call.message.answer_photo(
+        photo=FSInputFile(image_path),
+        caption="<b>🏆 ТОП-20 игроков клана</b>",
+    )
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("cw:view:"))
 async def CW_menu_view(call: CallbackQuery):
