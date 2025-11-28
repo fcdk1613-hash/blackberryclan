@@ -1461,7 +1461,7 @@ ef generate_cw_result_image(
             return None
         return None
 
-    bb_logo = load_logo("Blackberry logo.png", logo_size)
+    bb_logo = load_logo("logo.png", logo_size)
     opp_logo = load_logo("opponent.png", logo_size)
 
     if bb_logo is not None:
