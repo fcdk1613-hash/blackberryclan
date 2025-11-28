@@ -1242,8 +1242,8 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int, str]]
         rank_icon_path = get_rank_icon_path(rank_name)
         if rank_icon_path:
             try:
-                rank_icon = Image.open(rank_icon_path).convert("RGBA").resize((35, 35), Image.LANCZOS)
-                img.paste(rank_icon, (col_rank_x, y - 4), rank_icon)
+                rank_icon = Image.open(rank_icon_path).convert("RGBA").resize((40, 40), Image.LANCZOS)
+                img.paste(rank_icon, (col_rank_x, y), rank_icon)
             except Exception:
                 # если что-то пошло не так — рисуем текстовый бейдж
                 badge = get_rank_badge_text(rank_name)
