@@ -1925,13 +1925,13 @@ await db.execute(
     (war_id, uid, revives, kills, deaths, caps, total_delta),
 )
 
-            await notify_rank_if_changed(uid, old_elo, new_elo)
+        await notify_rank_if_changed(uid, old_elo, new_elo)
 
-            # MVP считаем только если победитель Blackberry
-            if winner_label == "Blackberry" and per_player_stats:
-                if mvp_elo_gain is None or total_delta > mvp_elo_gain:
-                    mvp_elo_gain = total_delta
-                    mvp_user_id = uid
+        # MVP считаем только если победитель Blackberry
+        if winner_label == "Blackberry" and per_player_stats:
+            if mvp_elo_gain is None or total_delta > mvp_elo_gain:
+                mvp_elo_gain = total_delta
+                mvp_user_id = uid
 
         # Обновляем MVP игрока только если победитель Blackberry
         if winner_label == "Blackberry" and mvp_user_id is not None:
