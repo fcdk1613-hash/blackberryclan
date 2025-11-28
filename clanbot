@@ -1358,9 +1358,10 @@ def generate_cw_result_image(
         if os.path.exists(bg_path):
             img = Image.open(bg_path).convert("RGBA").resize((width, height))
         else:
-            img = Image.new("RGBA", (15, 0, 35, 255))
+            # просто сплошной фон, если файла нет
+            img = Image.new("RGBA", (width, height), (15, 0, 35, 255))
     except Exception:
-        img = Image.new("RGBA", (15, 0, 35, 255))
+        img = Image.new("RGBA", (width, height), (15, 0, 35, 255))
 
     draw = ImageDraw.Draw(img)
 
@@ -4825,6 +4826,7 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
     except Exception:
         # если при генерации/отправке картинка упала — не ломаем основной вывод
         pass
+
     await state.clear()
 
     # Просим ввести ID КВ
@@ -4927,7 +4929,22 @@ async def cw_stats_score(message: Message, state: FSMContext):
             try:
                 war = await CW_get_war(war_id)
                 stats_rows = await CW_player_stats_for_war(war_id)
-                img_path = generate_cw_result_image(war, stats_rows, bb_score, opp_score)
+
+                mvp_name = None
+                if stats_rows:
+                    best = stats_rows[0]
+                    best_user = await get_user(best["user_id"])
+                    mvp_name = display_name(
+                        best_user,
+                        fallback_fullname=best.get("nickname") or str(best["user_id"]),
+                    )
+
+                img_path = generate_cw_result_image(
+                    war,
+                    bb_score=int(bb_score) if bb_score is not None else 0,
+                    opp_score=int(opp_score) if opp_score is not None else 0,
+                    mvp_name=mvp_name,
+                )
                 await message.answer_photo(
                     photo=FSInputFile(img_path),
                     caption="Результаты КВ",
@@ -5077,11 +5094,21 @@ async def cw_stats_caps(message: Message, state: FSMContext):
         try:
             war = await CW_get_war(war_id)
             stats_rows = await CW_player_stats_for_war(war_id)
+
+            mvp_name = None
+            if stats_rows:
+                best = stats_rows[0]
+                best_user = await get_user(best["user_id"])
+                mvp_name = display_name(
+                    best_user,
+                    fallback_fullname=best.get("nickname") or str(best["user_id"]),
+                )
+
             img_path = generate_cw_result_image(
                 war,
-                stats_rows,
-                int(bb_score) if bb_score is not None else 0,
-                int(opp_score) if opp_score is not None else 0,
+                bb_score=int(bb_score) if bb_score is not None else 0,
+                opp_score=int(opp_score) if opp_score is not None else 0,
+                mvp_name=mvp_name,
             )
             await message.answer_photo(
                 photo=FSInputFile(img_path),
