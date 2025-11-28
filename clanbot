@@ -1322,237 +1322,343 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int, str]]
 
     return full_path
 
-def generate_cw_result_image(
+ef generate_cw_result_image(
     war: dict,
-    stats_rows: list[dict],
     bb_score: int,
     opp_score: int,
+    mvp_name: str | None = None,
 ) -> str:
     """
-    PNG-карточка результатов КВ в стиле киберспорта.
+    Генерация красивой карточки результатов КВ.
 
-    Используются файлы:
-    - icons/backkw.png          — фон
-    - icons/Blackberry logo.png — эмблема клана Blackberry (BB)
-    - icons/opponent.png        — эмблема оппонента
-    - icons/mvp.png             — иконка MVP
-    - icons/maps/<map>.png      — картинка карты (по названию карты, приведённому к нижнему регистру и с подчёркиваниями вместо пробелов)
+    Требуемые файлы в папке icons:
+    - backkw.png          — фон
+    - Blackberry logo.png — эмблема клана BB
+    - opponent.png        — эмблема противника
+    - mvp.png             — иконка MVP
+    - skorpo.png / narva.png / gorodok.png / mutaha.png / fallujah.png — логотип карты
+      (выбирается по подстроке в названии карты).
+
+    Цвета — фиолетовый / чёрный / тёмно-фиолетовый.
     """
+
+    from datetime import datetime
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(base_dir, "icons")
 
+    # --- размеры canvas ---
+    width, height = 1280, 720
+
     # --- фон ---
-    bg_path = os.path.join(icons_dir, "backkw.png")
     try:
-        bg = Image.open(bg_path).convert("RGBA")
+        bg_path = os.path.join(icons_dir, "backkw.png")
+        if os.path.exists(bg_path):
+            img = Image.open(bg_path).convert("RGBA").resize((width, height))
+        else:
+            img = Image.new("RGBA", (15, 0, 35, 255))
     except Exception:
-        # запасной фон, если файла нет
-        bg = Image.new("RGBA", (1280, 720), (15, 5, 35, 255))
+        img = Image.new("RGBA", (15, 0, 35, 255))
 
-    width, height = bg.size
-
-    # полупрозрачная подложка
-    overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
-    ov_draw = ImageDraw.Draw(overlay)
-    panel_margin_x = int(width * 0.06)
-    panel_margin_y = int(height * 0.18)
-    panel_rect = (panel_margin_x, panel_margin_y, width - panel_margin_x, height - panel_margin_y)
-    ov_draw.rectangle(panel_rect, fill=(20, 10, 40, 190))
-
-    img = Image.alpha_composite(bg, overlay)
     draw = ImageDraw.Draw(img)
 
-    # шрифты
+    # --- шрифты (чуть уменьшены, чтобы влезали длинные ники MVP) ---
     try:
-        title_font = ImageFont.truetype("arial.ttf", 52)
-        score_font = ImageFont.truetype("arialbd.ttf", 80)
-        label_font = ImageFont.truetype("arial.ttf", 32)
-        small_font = ImageFont.truetype("arial.ttf", 26)
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 52)
+        score_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 90)
+        name_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
+        small_font = ImageFont.truetype("DejaVuSans.ttf", 24)
+        tiny_font = ImageFont.truetype("DejaVuSans.ttf", 20)
     except Exception:
-        title_font = ImageFont.load_default()
-        score_font = ImageFont.load_default()
-        label_font = ImageFont.load_default()
-        small_font = ImageFont.load_default()
+        title_font = score_font = name_font = small_font = tiny_font = ImageFont.load_default()
 
-    opponents = (war.get("opponents") or "").strip() or "BB vs Opponent"
-    left_clan = "BB"
-    right_clan = "Оппонент"
-    if "vs" in opponents:
-        left_part, right_part = opponents.split("vs", 1)
-        left_clan = (left_part or "BB").strip() or "BB"
-        right_clan = (right_part or "Оппонент").strip() or "Оппонент"
+    # --- полупрозрачная центральная панель ---
+    panel_margin_x, panel_margin_y = 70, 60
+    panel_x0 = panel_margin_x
+    panel_y0 = panel_margin_y
+    panel_x1 = width - panel_margin_x
+    panel_y1 = height - panel_margin_y
 
-    # заголовок
-    title_text = "CLAN WAR RESULT"
-    tw, th = draw.textsize(title_text, font=title_font)
+    panel_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    panel_draw = ImageDraw.Draw(panel_layer)
+    panel_draw.rectangle(
+        (panel_x0, panel_y0, panel_x1, panel_y1),
+        fill=(5, 0, 20, 190),
+        outline=(150, 90, 255, 255),
+        width=3,
+    )
+    img = Image.alpha_composite(img, panel_layer)
+    draw = ImageDraw.Draw(img)
+
+    # --- разбор "BB vs OPP" ---
+    opponents = (war.get("opponents") or "").strip() or "BB vs ?"
+    bb_tag = "BB"
+    enemy_tag = "OPPONENT"
+
+    low = opponents.lower()
+    if "vs" in low:
+        left, right = opponents.split("vs", 1)
+        left = left.strip()
+        right = right.strip()
+        if left:
+            bb_tag = left
+        if right:
+            enemy_tag = right
+    else:
+        enemy_tag = opponents
+
+    # --- заголовок: "BB vs FOX" ---
+    title = f"{bb_tag} vs {enemy_tag}"
+    title_w, title_h = draw.textsize(title, font=title_font)
+    title_x = panel_x0 + (panel_x1 - panel_x0 - title_w) // 2
+    title_y = panel_y0 + 18
+    draw.text((title_x, title_y), title, font=title_font, fill=(230, 220, 255))
+
+    # --- общий счёт КВ (центр) ---
+    score_text = f"{bb_score}:{opp_score}"
+    score_w, score_h = draw.textsize(score_text, font=score_font)
+    score_x = panel_x0 + (panel_x1 - panel_x0 - score_w) // 2
+    score_y = title_y + title_h + 15
+    draw.text((score_x, score_y), score_text, font=score_font, fill=(245, 230, 255))
+
+    # --- подпись о победителе под счётом ---
+    winner_label = (war.get("winner") or "").strip()
+    win_y = score_y + score_h
+    if winner_label:
+        wl = winner_label.lower()
+        if wl.startswith("black"):
+            winner_line = "Победа Blackberry"
+            win_color = (180, 255, 200)
+        elif "против" in wl or "opponent" in wl:
+            winner_line = "Победа противника"
+            win_color = (255, 190, 190)
+        else:
+            winner_line = winner_label
+            win_color = (230, 230, 230)
+
+        winner_w, winner_h = draw.textsize(winner_line, font=small_font)
+        winner_x = panel_x0 + (panel_x1 - panel_x0 - winner_w) // 2
+        win_y = win_y + 10
+        draw.text((winner_x, win_y), winner_line, font=small_font, fill=win_color)
+
+    # --- логотипы кланов и их счёт под ними ---
+    logo_size = 150
+    mid_x = (panel_x0 + panel_x1) // 2
+    col_spacing = 130
+
+    left_center_x = mid_x - (logo_size // 2 + col_spacing)
+    right_center_x = mid_x + (logo_size // 2 + col_spacing)
+    logos_y = win_y + 40
+
+    def load_logo(filename: str, size: int) -> Image.Image | None:
+        path = os.path.join(icons_dir, filename)
+        try:
+            if os.path.exists(path):
+                im = Image.open(path).convert("RGBA")
+                im = im.resize((size, size), Image.LANCZOS)
+                return im
+        except Exception:
+            return None
+        return None
+
+    bb_logo = load_logo("Blackberry logo.png", logo_size)
+    opp_logo = load_logo("opponent.png", logo_size)
+
+    if bb_logo is not None:
+        img.paste(bb_logo, (left_center_x - logo_size // 2, logos_y), bb_logo)
+    else:
+        draw.ellipse(
+            (
+                left_center_x - logo_size // 2,
+                logos_y,
+                left_center_x + logo_size // 2,
+                logos_y + logo_size,
+            ),
+            fill=(60, 0, 100),
+        )
+
+    if opp_logo is not None:
+        img.paste(opp_logo, (right_center_x - logo_size // 2, logos_y), opp_logo)
+    else:
+        draw.ellipse(
+            (
+                right_center_x - logo_size // 2,
+                logos_y,
+                right_center_x + logo_size // 2,
+                logos_y + logo_size,
+            ),
+            fill=(20, 20, 20),
+        )
+
+    # подписи кланов
+    names_y = logos_y + logo_size + 8
+    bb_name_w, _ = draw.textsize(bb_tag, font=name_font)
+    enemy_name_w, _ = draw.textsize(enemy_tag, font=name_font)
+
     draw.text(
-        ((width - tw) // 2, panel_margin_y + 20),
-        title_text,
-        font=title_font,
+        (left_center_x - bb_name_w / 2, names_y),
+        bb_tag,
+        font=name_font,
+        fill=(230, 220, 255),
+    )
+    draw.text(
+        (right_center_x - enemy_name_w / 2, names_y),
+        enemy_tag,
+        font=name_font,
         fill=(230, 220, 255),
     )
 
-    # --- эмблемы ---
-    logo_size = 170
-    logo_y = panel_margin_y + 80
+    # маленький счёт под названиями кланов
+    scores_y = names_y + 28
+    bb_small = str(bb_score)
+    opp_small = str(opp_score)
 
-    def _safe_logo(path: str):
-        try:
-            im = Image.open(path).convert("RGBA")
-            im = im.resize((logo_size, logo_size))
-            return im
-        except Exception:
-            return None
-
-    bb_logo = _safe_logo(os.path.join(icons_dir, "Blackberry logo.png"))
-    opp_logo = _safe_logo(os.path.join(icons_dir, "opponent.png"))
-
-    left_x = panel_margin_x + 60
-    right_x = width - panel_margin_x - 60 - logo_size
-
-    if bb_logo:
-        img.paste(bb_logo, (left_x, logo_y), bb_logo)
-    if opp_logo:
-        img.paste(opp_logo, (right_x, logo_y), opp_logo)
-
-    # названия кланов
-    draw.text(
-        (left_x + logo_size // 2, logo_y + logo_size + 10),
-        left_clan,
-        font=label_font,
-        fill=(230, 230, 255),
-        anchor="mt",
-    )
-    draw.text(
-        (right_x + logo_size // 2, logo_y + logo_size + 10),
-        right_clan,
-        font=label_font,
-        fill=(230, 230, 255),
-        anchor="mt",
-    )
-
-    # --- счёт ---
-    score_y = logo_y + logo_size // 2
-    score_text_left = str(bb_score)
-    score_text_right = str(opp_score)
-
-    # разделитель "VS"
-    vs_text = "VS"
-    vs_tw, vs_th = draw.textsize(vs_text, font=label_font)
-    vs_x = width // 2
-    draw.text(
-        (vs_x, score_y - vs_th // 2 - 10),
-        vs_text,
-        font=label_font,
-        fill=(200, 180, 255),
-        anchor="mm",
-    )
-
-    # левое/правое число
-    sl_tw, _ = draw.textsize(score_text_left, font=score_font)
-    sr_tw, _ = draw.textsize(score_text_right, font=score_font)
-
-    left_score_x = vs_x - 80 - sl_tw
-    right_score_x = vs_x + 80
+    bb_small_w, _ = draw.textsize(bb_small, font=small_font)
+    opp_small_w, _ = draw.textsize(opp_small, font=small_font)
 
     draw.text(
-        (left_score_x, score_y),
-        score_text_left,
-        font=score_font,
-        fill=(255, 255, 255),
-        anchor="lm",
+        (left_center_x - bb_small_w / 2, scores_y),
+        bb_small,
+        font=small_font,
+        fill=(200, 255, 200),
     )
     draw.text(
-        (right_score_x, score_y),
-        score_text_right,
-        font=score_font,
-        fill=(255, 255, 255),
-        anchor="lm",
+        (right_center_x - opp_small_w / 2, scores_y),
+        opp_small,
+        font=small_font,
+        fill=(255, 200, 200),
     )
 
-    # --- MVP ---
-    mvp_name = "—"
-    if stats_rows:
-        best = stats_rows[0]  # CW_player_stats_for_war отдаёт отсортированным по elo_delta
-        mvp_name = best.get("nickname") or str(best.get("user_id", ""))
-        if not mvp_name:
-            mvp_name = "—"
+    # --- блок MVP внизу слева ---
+    mvp_block_x = panel_x0 + 40
+    mvp_block_y = panel_y1 - 130
+    mvp_icon_size = 48
 
-    mvp_block_x = panel_margin_x + 80
-    mvp_block_y = height - panel_margin_y - 120
-
-    # иконка MVP
-    icon_size = 64
     try:
-        mvp_icon = Image.open(os.path.join(icons_dir, "mvp.png")).convert("RGBA")
-        mvp_icon = mvp_icon.resize((icon_size, icon_size))
-        img.paste(mvp_icon, (mvp_block_x, mvp_block_y), mvp_icon)
+        mvp_icon_path = os.path.join(icons_dir, "mvp.png")
+        if os.path.exists(mvp_icon_path):
+            mvp_icon = Image.open(mvp_icon_path).convert("RGBA")
+            mvp_icon = mvp_icon.resize((mvp_icon_size, mvp_icon_size), Image.LANCZOS)
+        else:
+            mvp_icon = None
     except Exception:
+        mvp_icon = None
+
+    if mvp_icon is not None:
+        img.paste(mvp_icon, (mvp_block_x, mvp_block_y), mvp_icon)
+    else:
         draw.text(
             (mvp_block_x, mvp_block_y),
             "👑",
-            font=score_font,
-            fill=(240, 220, 255),
+            font=small_font,
+            fill=(230, 220, 255),
         )
 
+    mvp_text = f"MVP: {mvp_name or '—'}"
+    # Чтобы длинный ник MVP влезал — выделяем широкую область и, если что, обрезаем с "..."
+    max_mvp_width = (panel_x1 - panel_x0) // 2
+    if draw.textlength(mvp_text, font=small_font) > max_mvp_width:
+        # грубое обрезание с "..."
+        while len(mvp_text) > 5 and draw.textlength(mvp_text + "...", font=small_font) > max_mvp_width:
+            mvp_text = mvp_text[:-1]
+        mvp_text += "..."
+
+    mvp_text_x = mvp_block_x + mvp_icon_size + 14
+    mvp_text_y = mvp_block_y + 8
     draw.text(
-        (mvp_block_x + icon_size + 15, mvp_block_y + icon_size // 2),
-        f"MVP: {mvp_name}",
+        (mvp_text_x, mvp_text_y),
+        mvp_text,
         font=small_font,
-        fill=(230, 230, 255),
-        anchor="lm",
+        fill=(230, 220, 255),
     )
 
-    # --- карта в углу ---
-    map_name = (war.get("map") or "").strip()
-    if map_name:
-        slug = map_name.lower().replace(" ", "_")
-        map_path = os.path.join(icons_dir, "maps", f"{slug}.png")
+    # --- блок карты внизу справа: картинка НАД названием карты ---
+    map_name = (war.get("map") or "—").strip() or "—"
+
+    map_block_width = 320
+    map_block_height = 190
+    map_block_x1 = panel_x1 - 40
+    map_block_x0 = map_block_x1 - map_block_width
+    map_block_y1 = panel_y1 - 40
+    map_block_y0 = map_block_y1 - map_block_height
+
+    map_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    map_draw = ImageDraw.Draw(map_layer)
+    map_draw.rectangle(
+        (map_block_x0, map_block_y0, map_block_x1, map_block_y1),
+        fill=(15, 5, 45, 220),
+        outline=(160, 100, 255, 255),
+        width=2,
+    )
+    img = Image.alpha_composite(img, map_layer)
+    draw = ImageDraw.Draw(img)
+
+    # выбираем картинку для карты по подстроке
+    lower_map = map_name.lower()
+    map_logo_file = None
+    map_logo_map = {
+        "skorpo": "skorpo.png",
+        "narva": "narva.png",
+        "gorodok": "gorodok.png",
+        "mutaha": "mutaha.png",
+        "fallujah": "fallujah.png",
+    }
+    for key, fname in map_logo_map.items():
+        if key in lower_map:
+            candidate = os.path.join(icons_dir, fname)
+            if os.path.exists(candidate):
+                map_logo_file = candidate
+            break
+
+    logo_height = 0
+    if map_logo_file:
         try:
-            map_img = Image.open(map_path).convert("RGBA")
-            max_map_size = 240
-            map_img.thumbnail((max_map_size, max_map_size))
-            mx, my = map_img.size
-            map_x = width - panel_margin_x - mx - 20
-            map_y = height - panel_margin_y - my - 20
-
-            # подложка под карту
-            pad = 6
-            draw.rounded_rectangle(
-                (map_x - pad, map_y - pad, map_x + mx + pad, map_y + my + pad),
-                radius=18,
-                fill=(10, 5, 25, 200),
-            )
-
-            img.paste(map_img, (map_x, map_y), map_img)
-
-            # подпись карты
-            draw.text(
-                (map_x + mx // 2, map_y - 10),
-                map_name,
-                font=small_font,
-                fill=(230, 230, 255),
-                anchor="mb",
-            )
+            map_logo = Image.open(map_logo_file).convert("RGBA")
+            # картинка над названием карты
+            max_logo_w = map_block_width - 20
+            max_logo_h = 90
+            map_logo.thumbnail((max_logo_w, max_logo_h), Image.LANCZOS)
+            logo_w, logo_height = map_logo.size
+            logo_x = map_block_x0 + (map_block_width - logo_w) // 2
+            logo_y = map_block_y0 + 8
+            img.paste(map_logo, (logo_x, logo_y), map_logo)
         except Exception:
-            # если файла карты нет — просто пропускаем
-            pass
+            logo_height = 0
 
-    # --- подпись снизу (дата/время) ---
-    footer_text = format_cw_datetime(war.get("starts_at")) if war.get("starts_at") else ""
-    if footer_text:
-        draw.text(
-            (width // 2, height - panel_margin_y - 10),
-            footer_text,
-            font=small_font,
-            fill=(190, 180, 230),
-            anchor="ms",
-        )
+    # подпись самой карты под логотипом
+    map_text_y = map_block_y0 + 8 + (logo_height or 0) + 10
+    max_map_text_width = map_block_width - 20
+    map_line = map_name
+    if draw.textlength(map_line, font=small_font) > max_map_text_width:
+        # грубо обрезаем и добавляем "..."
+        while len(map_line) > 5 and draw.textlength(map_line + "...", font=small_font) > max_map_text_width:
+            map_line = map_line[:-1]
+        map_line += "..."
 
-    # сохраняем файл
+    map_text_w, map_text_h = draw.textsize(map_line, font=small_font)
+    map_text_x = map_block_x0 + (map_block_width - map_text_w) // 2
+    draw.text(
+        (map_text_x, map_text_y),
+        map_line,
+        font=small_font,
+        fill=(230, 220, 255),
+    )
+
+    # подпись "Карта" в углу блока
+    label = "Карта"
+    lbl_w, lbl_h = draw.textsize(label, font=tiny_font)
+    draw.text(
+        (map_block_x0 + 10, map_block_y1 - lbl_h - 6),
+        label,
+        font=tiny_font,
+        fill=(180, 160, 255),
+    )
+
+    # --- сохраняем результат ---
     out_dir = os.path.join(base_dir, "cw_results")
     os.makedirs(out_dir, exist_ok=True)
-    filename = f"cw_{war.get('id', 'x')}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    war_id = war.get("id") or "x"
+    filename = f"cw_{war_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
     full_path = os.path.join(out_dir, filename)
     img.save(full_path, "PNG")
 
@@ -4675,6 +4781,27 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
     lines.append("</code>")
 
     await message.answer("\n".join(lines))
+    # --- картинка с результатами КВ (тот же стиль, что при завершении) ---
+    try:
+        # общий счёт КВ берём из полей war (если ты их уже добавил в таблицу cw_wars)
+        bb_total = int(war.get("bb_score") or 0)
+        opp_total = int(war.get("opp_score") or 0)
+
+        # best_name у тебя уже посчитан выше как ник MVP
+        img_path = generate_cw_result_image(
+            war,
+            bb_score=bb_total,
+            opp_score=opp_total,
+            mvp_name=best_name,
+        )
+
+        await message.answer_photo(
+            photo=FSInputFile(img_path),
+            caption="📊 Карточка результатов КВ",
+        )
+    except Exception:
+        # если при генерации/отправке картинка упала — не ломаем основной вывод
+        pass
     await state.clear()
 
     # Просим ввести ID КВ
