@@ -1889,9 +1889,7 @@ async def CW_finish(
                 ),
             )
 
-from datetime import datetime  # у тебя уже импортирован выше
-
-        # --- Новый ELO после всех начислений
+        # --- Новый ELO после всех начислений ---
         cur = await db.execute(
             "SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?",
             (uid,),
