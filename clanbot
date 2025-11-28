@@ -4829,11 +4829,6 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
 
     await state.clear()
 
-    # Просим ввести ID КВ
-    await call.message.answer("Введите ID матча (ID КВ), результаты которого нужно показать:")
-    await state.set_state(CWViewStatsState.waiting_war_id)
-    await call.answer()
-
 @dp.callback_query(F.data.startswith("cw:finishset:"))
 async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
