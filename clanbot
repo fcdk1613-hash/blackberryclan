@@ -12,6 +12,7 @@ from typing import Optional, Tuple, List
 import aiosqlite
 import csv
 import os
+import re
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -141,7 +142,9 @@ CREATE TABLE IF NOT EXISTS cw_wars (
     rules TEXT,
     server TEXT,
     status TEXT NOT NULL DEFAULT 'scheduled',
-    winner TEXT
+    winner TEXT,
+    bb_score INTEGER,
+    opp_score INTEGER
 );
 """
 CREATE_CW_REGS_SQL = """
@@ -359,6 +362,15 @@ async def init_db():
                 await db.execute(alter)
             except Exception:
                 pass
+        for alter in [
+            "ALTER TABLE cw_wars ADD COLUMN bb_score INTEGER",
+            "ALTER TABLE cw_wars ADD COLUMN opp_score INTEGER",
+        ]:
+            try:
+                await db.execute(alter)
+            except Exception:
+                # колонка уже есть – просто игнорируем
+                pass
         await db.commit()
     await ensure_clan_ids()
 
@@ -457,6 +469,7 @@ class EloEditState(StatesGroup):
     waiting_new_elo = State()
 
 class CWStatsState(StatesGroup):
+    waiting_score = State()
     waiting_revives = State()
     waiting_kills = State()
     waiting_deaths = State()
@@ -1309,6 +1322,242 @@ def generate_top_leaderboard_image(entries: list[tuple[int, str, int, int, str]]
 
     return full_path
 
+def generate_cw_result_image(
+    war: dict,
+    stats_rows: list[dict],
+    bb_score: int,
+    opp_score: int,
+) -> str:
+    """
+    PNG-карточка результатов КВ в стиле киберспорта.
+
+    Используются файлы:
+    - icons/backkw.png          — фон
+    - icons/Blackberry logo.png — эмблема клана Blackberry (BB)
+    - icons/opponent.png        — эмблема оппонента
+    - icons/mvp.png             — иконка MVP
+    - icons/maps/<map>.png      — картинка карты (по названию карты, приведённому к нижнему регистру и с подчёркиваниями вместо пробелов)
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    icons_dir = os.path.join(base_dir, "icons")
+
+    # --- фон ---
+    bg_path = os.path.join(icons_dir, "backkw.png")
+    try:
+        bg = Image.open(bg_path).convert("RGBA")
+    except Exception:
+        # запасной фон, если файла нет
+        bg = Image.new("RGBA", (1280, 720), (15, 5, 35, 255))
+
+    width, height = bg.size
+
+    # полупрозрачная подложка
+    overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+    ov_draw = ImageDraw.Draw(overlay)
+    panel_margin_x = int(width * 0.06)
+    panel_margin_y = int(height * 0.18)
+    panel_rect = (panel_margin_x, panel_margin_y, width - panel_margin_x, height - panel_margin_y)
+    ov_draw.rectangle(panel_rect, fill=(20, 10, 40, 190))
+
+    img = Image.alpha_composite(bg, overlay)
+    draw = ImageDraw.Draw(img)
+
+    # шрифты
+    try:
+        title_font = ImageFont.truetype("arial.ttf", 52)
+        score_font = ImageFont.truetype("arialbd.ttf", 80)
+        label_font = ImageFont.truetype("arial.ttf", 32)
+        small_font = ImageFont.truetype("arial.ttf", 26)
+    except Exception:
+        title_font = ImageFont.load_default()
+        score_font = ImageFont.load_default()
+        label_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+
+    opponents = (war.get("opponents") or "").strip() or "BB vs Opponent"
+    left_clan = "BB"
+    right_clan = "Оппонент"
+    if "vs" in opponents:
+        left_part, right_part = opponents.split("vs", 1)
+        left_clan = (left_part or "BB").strip() or "BB"
+        right_clan = (right_part or "Оппонент").strip() or "Оппонент"
+
+    # заголовок
+    title_text = "CLAN WAR RESULT"
+    tw, th = draw.textsize(title_text, font=title_font)
+    draw.text(
+        ((width - tw) // 2, panel_margin_y + 20),
+        title_text,
+        font=title_font,
+        fill=(230, 220, 255),
+    )
+
+    # --- эмблемы ---
+    logo_size = 170
+    logo_y = panel_margin_y + 80
+
+    def _safe_logo(path: str):
+        try:
+            im = Image.open(path).convert("RGBA")
+            im = im.resize((logo_size, logo_size))
+            return im
+        except Exception:
+            return None
+
+    bb_logo = _safe_logo(os.path.join(icons_dir, "Blackberry logo.png"))
+    opp_logo = _safe_logo(os.path.join(icons_dir, "opponent.png"))
+
+    left_x = panel_margin_x + 60
+    right_x = width - panel_margin_x - 60 - logo_size
+
+    if bb_logo:
+        img.paste(bb_logo, (left_x, logo_y), bb_logo)
+    if opp_logo:
+        img.paste(opp_logo, (right_x, logo_y), opp_logo)
+
+    # названия кланов
+    draw.text(
+        (left_x + logo_size // 2, logo_y + logo_size + 10),
+        left_clan,
+        font=label_font,
+        fill=(230, 230, 255),
+        anchor="mt",
+    )
+    draw.text(
+        (right_x + logo_size // 2, logo_y + logo_size + 10),
+        right_clan,
+        font=label_font,
+        fill=(230, 230, 255),
+        anchor="mt",
+    )
+
+    # --- счёт ---
+    score_y = logo_y + logo_size // 2
+    score_text_left = str(bb_score)
+    score_text_right = str(opp_score)
+
+    # разделитель "VS"
+    vs_text = "VS"
+    vs_tw, vs_th = draw.textsize(vs_text, font=label_font)
+    vs_x = width // 2
+    draw.text(
+        (vs_x, score_y - vs_th // 2 - 10),
+        vs_text,
+        font=label_font,
+        fill=(200, 180, 255),
+        anchor="mm",
+    )
+
+    # левое/правое число
+    sl_tw, _ = draw.textsize(score_text_left, font=score_font)
+    sr_tw, _ = draw.textsize(score_text_right, font=score_font)
+
+    left_score_x = vs_x - 80 - sl_tw
+    right_score_x = vs_x + 80
+
+    draw.text(
+        (left_score_x, score_y),
+        score_text_left,
+        font=score_font,
+        fill=(255, 255, 255),
+        anchor="lm",
+    )
+    draw.text(
+        (right_score_x, score_y),
+        score_text_right,
+        font=score_font,
+        fill=(255, 255, 255),
+        anchor="lm",
+    )
+
+    # --- MVP ---
+    mvp_name = "—"
+    if stats_rows:
+        best = stats_rows[0]  # CW_player_stats_for_war отдаёт отсортированным по elo_delta
+        mvp_name = best.get("nickname") or str(best.get("user_id", ""))
+        if not mvp_name:
+            mvp_name = "—"
+
+    mvp_block_x = panel_margin_x + 80
+    mvp_block_y = height - panel_margin_y - 120
+
+    # иконка MVP
+    icon_size = 64
+    try:
+        mvp_icon = Image.open(os.path.join(icons_dir, "mvp.png")).convert("RGBA")
+        mvp_icon = mvp_icon.resize((icon_size, icon_size))
+        img.paste(mvp_icon, (mvp_block_x, mvp_block_y), mvp_icon)
+    except Exception:
+        draw.text(
+            (mvp_block_x, mvp_block_y),
+            "👑",
+            font=score_font,
+            fill=(240, 220, 255),
+        )
+
+    draw.text(
+        (mvp_block_x + icon_size + 15, mvp_block_y + icon_size // 2),
+        f"MVP: {mvp_name}",
+        font=small_font,
+        fill=(230, 230, 255),
+        anchor="lm",
+    )
+
+    # --- карта в углу ---
+    map_name = (war.get("map") or "").strip()
+    if map_name:
+        slug = map_name.lower().replace(" ", "_")
+        map_path = os.path.join(icons_dir, "maps", f"{slug}.png")
+        try:
+            map_img = Image.open(map_path).convert("RGBA")
+            max_map_size = 240
+            map_img.thumbnail((max_map_size, max_map_size))
+            mx, my = map_img.size
+            map_x = width - panel_margin_x - mx - 20
+            map_y = height - panel_margin_y - my - 20
+
+            # подложка под карту
+            pad = 6
+            draw.rounded_rectangle(
+                (map_x - pad, map_y - pad, map_x + mx + pad, map_y + my + pad),
+                radius=18,
+                fill=(10, 5, 25, 200),
+            )
+
+            img.paste(map_img, (map_x, map_y), map_img)
+
+            # подпись карты
+            draw.text(
+                (map_x + mx // 2, map_y - 10),
+                map_name,
+                font=small_font,
+                fill=(230, 230, 255),
+                anchor="mb",
+            )
+        except Exception:
+            # если файла карты нет — просто пропускаем
+            pass
+
+    # --- подпись снизу (дата/время) ---
+    footer_text = format_cw_datetime(war.get("starts_at")) if war.get("starts_at") else ""
+    if footer_text:
+        draw.text(
+            (width // 2, height - panel_margin_y - 10),
+            footer_text,
+            font=small_font,
+            fill=(190, 180, 230),
+            anchor="ms",
+        )
+
+    # сохраняем файл
+    out_dir = os.path.join(base_dir, "cw_results")
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"cw_{war.get('id', 'x')}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    full_path = os.path.join(out_dir, filename)
+    img.save(full_path, "PNG")
+
+    return full_path
+
 def display_name(user: dict | None, fallback_fullname: str | None = None) -> str:
     try:
         nick = (user.get("nickname") if user else None) or (fallback_fullname or "")
@@ -1433,7 +1682,13 @@ async def CW_unregister(war_id: int, user_id: int) -> None:
         await db.execute("DELETE FROM cw_registrations WHERE war_id=? AND user_id=?", (war_id, user_id))
         await db.commit()
 
-async def CW_finish(war_id: int, winner_label: str, per_player_stats=None) -> bool:
+async def CW_finish(
+    war_id: int,
+    winner_label: str,
+    per_player_stats=None,
+    bb_score: int | None = None,
+    opp_score: int | None = None,
+) -> bool:
     """
    # Завершение КВ:
    # - всегда считает/копит статистику (поднятия, kills/deaths, очки захвата);
@@ -1447,8 +1702,8 @@ async def CW_finish(war_id: int, winner_label: str, per_player_stats=None) -> bo
     regs = await CW_registrations(war_id)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE cw_wars SET winner=?, status='finished' WHERE id=?",
-            (winner_label, war_id),
+            "UPDATE cw_wars SET winner=?, status='finished', bb_score=COALESCE(?, bb_score), opp_score=COALESCE(?, opp_score) WHERE id=?",
+            (winner_label, bb_score, opp_score, war_id),
         )
 
         mvp_user_id = None
@@ -4378,6 +4633,10 @@ async def cw_show_match_stats(message: Message, state: FSMContext):
     lines: list[str] = []
     lines.append(f"<b>КВ #{war_id}</b>")
     lines.append(f"⚔ Противник: {war['opponents']}")
+    bb_score = war.get("bb_score")
+    opp_score = war.get("opp_score")
+    if bb_score is not None and opp_score is not None:
+        lines.append(f"📊 Счёт КВ: <b>{bb_score}:{opp_score}</b> (BB:противник)")
     lines.append(f"⏰ Время: {format_cw_datetime(war['starts_at'])}")
     lines.append(f"🗺 Карта: {war.get('map') or '-'}")
     lines.append(f"☠ Команда: {war.get('team_size')}")
@@ -4434,6 +4693,26 @@ async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
     label = "Blackberry" if who == "bb" else "Противник"
 
     regs = await CW_registrations(war_id)
+
+    # Сохраняем данные для FSM (даже если regs пустой — тогда просто не будем собирать статистику по игрокам)
+    await state.update_data(
+        cw_war_id=war_id,
+        cw_winner_label=label,
+        cw_player_ids=regs,
+        cw_index=0,
+        cw_stats={},  # user_id(str) -> {revives, kills, deaths, caps}
+        cw_moderator_id=call.from_user.id,
+    )
+
+    # Сначала спрашиваем общий счёт КВ
+    await call.message.answer(
+        "Введите общий счёт КВ в формате <b>BB:Противник</b> (например, <code>2:1</code>).\n"
+        "Первое число — количество раундов Blackberry, второе — раундов противника."
+    )
+    await state.set_state(CWStatsState.waiting_score)
+    await call.answer()
+
+    regs = await CW_registrations(war_id)
     # Если вдруг нет зарегистрированных игроков — завершаем как раньше
     if not regs:
         ok = await CW_finish(war_id, label)
@@ -4463,6 +4742,77 @@ async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
     )
     await state.set_state(CWStatsState.waiting_revives)
     await call.answer()
+
+@dp.message(CWStatsState.waiting_score)
+async def cw_stats_score(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    # допускаем форматы вида 2:1, 2-1, 2x1
+    m = re.match(r"^\s*(\d+)\s*[:xX\-]\s*(\d+)\s*$", raw)
+    if not m:
+        await message.answer(
+            "Введите счёт КВ в формате <b>BB:Противник</b>, например <code>2:1</code>."
+        )
+        return
+
+    bb_score = int(m.group(1))
+    opp_score = int(m.group(2))
+
+    data = await state.get_data()
+    war_id = data.get("cw_war_id")
+    winner_label = data.get("cw_winner_label")
+    player_ids: list[int] = data.get("cw_player_ids") or []
+
+    if war_id is None or winner_label is None:
+        await message.answer("Данные КВ потеряны, начните завершение КВ заново.")
+        await state.clear()
+        return
+
+    # сохраняем счёт в FSM, пригодится при финальном завершении
+    await state.update_data(cw_bb_score=bb_score, cw_opp_score=opp_score)
+
+    # Если игроков нет вообще — завершаем КВ сразу после ввода счёта
+    if not player_ids:
+        ok = await CW_finish(
+            war_id,
+            winner_label,
+            per_player_stats=None,
+            bb_score=bb_score,
+            opp_score=opp_score,
+        )
+
+        mod_id = data.get("cw_moderator_id")
+        if ok and mod_id:
+            await log_mod_action(mod_id, "Завершение КВ", target_id=war_id, extra=winner_label)
+
+        if ok:
+            # пробуем сгенерировать и отправить картинку результата
+            try:
+                war = await CW_get_war(war_id)
+                stats_rows = await CW_player_stats_for_war(war_id)
+                img_path = generate_cw_result_image(war, stats_rows, bb_score, opp_score)
+                await message.answer_photo(
+                    photo=FSInputFile(img_path),
+                    caption="Результаты КВ",
+                )
+            except Exception:
+                pass
+
+        await state.clear()
+        await message.answer("КВ завершено, счёт сохранён.")
+        return
+
+    # Если есть игроки — переходим к сбору персональной статистики
+    first_uid = player_ids[0]
+    user = await get_user(first_uid)
+    name = display_name(user, fallback_fullname=str(first_uid))
+
+    await message.answer(
+        f"КВ #{war_id}\nПобедитель: {winner_label}\n"
+        f"Счёт: {bb_score}:{opp_score} (BB:противник)\n\n"
+        f"Игрок: {name}\n"
+        f"Введите кол-во поднятий союзников (целое число):"
+    )
+    await state.set_state(CWStatsState.waiting_revives)
 
 @dp.message(CWStatsState.waiting_revives)
 async def cw_stats_revives(message: Message, state: FSMContext):
@@ -4567,12 +4917,39 @@ async def cw_stats_caps(message: Message, state: FSMContext):
         await state.set_state(CWStatsState.waiting_revives)
         return
 
-    # Все игроки обработаны — завершаем КВ
-    ok = await CW_finish(war_id, winner_label, per_player_stats=stats)
+# Все игроки обработаны — завершаем КВ
+    bb_score = data.get("cw_bb_score")
+    opp_score = data.get("cw_opp_score")
+
+    ok = await CW_finish(
+        war_id,
+        winner_label,
+        per_player_stats=stats,
+        bb_score=int(bb_score) if bb_score is not None else None,
+        opp_score=int(opp_score) if opp_score is not None else None,
+    )
     mod_id = data.get("cw_moderator_id")
 
     if ok and mod_id:
         await log_mod_action(mod_id, "Завершение КВ", target_id=war_id, extra=winner_label)
+
+    if ok:
+        # пробуем сгенерировать и отправить картинку результата
+        try:
+            war = await CW_get_war(war_id)
+            stats_rows = await CW_player_stats_for_war(war_id)
+            img_path = generate_cw_result_image(
+                war,
+                stats_rows,
+                int(bb_score) if bb_score is not None else 0,
+                int(opp_score) if opp_score is not None else 0,
+            )
+            await message.answer_photo(
+                photo=FSInputFile(img_path),
+                caption="Результаты КВ",
+            )
+        except Exception:
+            pass
 
     await state.clear()
     await message.answer("КВ завершено, статистика по игрокам сохранена и ELO обновлён.")
@@ -4593,11 +4970,15 @@ async def CW_cmd_stats(message: Message):
 
     for w in rows:
         res = w.get("winner") or "—"
-        # Добавляем ID КВ в строку
+        bb_score = w.get("bb_score")
+        opp_score = w.get("opp_score")
+        score_part = ""
+        if bb_score is not None and opp_score is not None:
+            score_part = f" (счёт {bb_score}:{opp_score})"
+
         lines.append(
-            f"• ID <b>{w['id']}</b>: {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: победитель {res}"
+            f"• ID <b>{w['id']}</b>: {format_cw_datetime(w['starts_at'])} — {w['opponents']} — результат: победитель {res}{score_part}"
         )
-        # Кнопка удаления КВ, как и раньше
         kb.button(
             text=f"🗑 Удалить {w['id']}",
             callback_data=f"cw:delete:{w['id']}",
