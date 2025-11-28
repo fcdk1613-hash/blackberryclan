@@ -4845,9 +4845,9 @@ async def CW_admin_finish_set(call: CallbackQuery, state: FSMContext):
     await state.update_data(
         cw_war_id=war_id,
         cw_winner_label=label,
-        cw_player_ids=regs,
-        cw_index=0,
-        cw_stats={},  # user_id(str) -> {revives, kills, deaths, caps}
+        cw_player_ids=regs,          # список user_id игроков
+        cw_index=0,                  # индекс текущего игрока в списке
+        cw_stats={},                 # ← ПУСТОЙ словарь для накопления стат
         cw_moderator_id=call.from_user.id,
     )
 
@@ -5016,7 +5016,10 @@ async def cw_stats_caps(message: Message, state: FSMContext):
     try:
         caps = int(raw)
     except ValueError:
-        await message.answer("Введите, пожалуйста, целое число. Повторите ввод кол-ва очков захвата:")
+        await message.answer(
+            "Введите, пожалуйста, целое число. "
+            "Повторите ввод кол-ва очков захвата:"
+        )
         return
 
     data = await state.get_data()
@@ -5024,6 +5027,8 @@ async def cw_stats_caps(message: Message, state: FSMContext):
     winner_label = data.get("cw_winner_label")
     player_ids: list[int] = data.get("cw_player_ids") or []
     idx = int(data.get("cw_index") or 0)
+
+    # ВАЖНО: берём уже накопленный словарь, а не создаём новый
     stats: dict = data.get("cw_stats") or {}
 
     if war_id is None or winner_label is None or not player_ids:
@@ -5033,11 +5038,14 @@ async def cw_stats_caps(message: Message, state: FSMContext):
 
     uid = player_ids[idx]
 
-    # Текущие значения по игроку
+    # Текущие значения по игроку, которые мы набрали в предыдущих шагах
     revives = int(data.get("current_revives") or 0)
     kills = int(data.get("current_kills") or 0)
     deaths = int(data.get("current_deaths") or 0)
 
+    # ⬇⬇⬇ ВОТ ЭТА СТРОКА ДОЛЖНА БЫТЬ ИМЕННО ТАК ⬇⬇⬇
+    # добавляем/обновляем ЗАПИСЬ ДЛЯ ЭТОГО игрока в общем словаре,
+    # а не пересоздаём весь словарь
     stats[str(uid)] = {
         "revives": revives,
         "kills": kills,
@@ -5045,17 +5053,17 @@ async def cw_stats_caps(message: Message, state: FSMContext):
         "caps": caps,
     }
 
-    # Обновляем FSM
+    # Обновляем данные в FSM и переходим к следующему игроку
     idx += 1
     await state.update_data(
         cw_index=idx,
-        cw_stats=stats,
+        cw_stats=stats,          # ← сохраняем ОБНОВЛЁННЫЙ словарь
         current_revives=None,
         current_kills=None,
         current_deaths=None,
     )
 
-    # Если есть ещё игроки — переходим к следующему
+    # Если есть ещё игроки — спрашиваем статы следующего
     if idx < len(player_ids):
         next_uid = player_ids[idx]
         user = await get_user(next_uid)
@@ -5068,42 +5076,38 @@ async def cw_stats_caps(message: Message, state: FSMContext):
         await state.set_state(CWStatsState.waiting_revives)
         return
 
-# Все игроки обработаны — завершаем КВ
+    # Все игроки обработаны — завершаем КВ
     bb_score = data.get("cw_bb_score")
     opp_score = data.get("cw_opp_score")
 
     ok = await CW_finish(
         war_id,
         winner_label,
-        per_player_stats=stats,
+        per_player_stats=stats,   # ← здесь уже все игроки
         bb_score=int(bb_score) if bb_score is not None else None,
         opp_score=int(opp_score) if opp_score is not None else None,
     )
-    mod_id = data.get("cw_moderator_id")
 
+    mod_id = data.get("cw_moderator_id")
     if ok and mod_id:
-        await log_mod_action(mod_id, "Завершение КВ", target_id=war_id, extra=winner_label)
+        await log_mod_action(
+            mod_id,
+            "Завершение КВ",
+            target_id=war_id,
+            extra=winner_label,
+        )
 
     if ok:
-        # пробуем сгенерировать и отправить картинку результата
+        # генерация и отправка картинки, как у тебя
+
         try:
             war = await CW_get_war(war_id)
             stats_rows = await CW_player_stats_for_war(war_id)
-
-            mvp_name = None
-            if stats_rows:
-                best = stats_rows[0]
-                best_user = await get_user(best["user_id"])
-                mvp_name = display_name(
-                    best_user,
-                    fallback_fullname=best.get("nickname") or str(best["user_id"]),
-                )
-
             img_path = generate_cw_result_image(
                 war,
-                bb_score=int(bb_score) if bb_score is not None else 0,
-                opp_score=int(opp_score) if opp_score is not None else 0,
-                mvp_name=mvp_name,
+                stats_rows,
+                int(bb_score) if bb_score is not None else 0,
+                int(opp_score) if opp_score is not None else 0,
             )
             await message.answer_photo(
                 photo=FSInputFile(img_path),
@@ -5113,8 +5117,9 @@ async def cw_stats_caps(message: Message, state: FSMContext):
             pass
 
     await state.clear()
-    await message.answer("КВ завершено, статистика по игрокам сохранена и ELO обновлён.")
-
+    await message.answer(
+        "КВ завершено, статистика по игрокам сохранена и ELO обновлён."
+    )
 @dp.message(Command("cw_stats"))
 async def CW_cmd_stats(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
