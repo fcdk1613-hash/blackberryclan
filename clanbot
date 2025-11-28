@@ -1891,39 +1891,43 @@ async def CW_finish(
 
 from datetime import datetime  # у тебя уже импортирован выше
 
-# ELO после изменения
-cur = await db.execute(
-    "SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?",
-    (uid,),
-)
-row = await cur.fetchone()
-new_elo = row[0] if row and row[0] is not None else 1000
+        # --- Новый ELO после всех начислений
+        cur = await db.execute(
+            "SELECT COALESCE(elo_rating, 1000) FROM users WHERE user_id = ?",
+            (uid,),
+        )
+        row = await cur.fetchone()
+        new_elo = row[0] if row and row[0] is not None else 1000
 
-delta = new_elo - old_elo
-if delta != 0:
-    # Логируем изменение рейтинга в той же транзакции CW
-    await db.execute(
-        """
-        INSERT INTO rating_changes(user_id, delta, reason, created_at)
-        VALUES (?,?,?,?)
-        """,
-        (
-            int(uid),
-            int(delta),             # как в log_rating_change — приводим к int
-            f"cw:{war_id}",
-            datetime.utcnow().isoformat(),
-        ),
-    )
+        delta = new_elo - old_elo
 
-# --- Сохраняем постатейную статистику именно для этого КВ ---
-await db.execute(
-    """
-    INSERT INTO cw_player_stats
-        (war_id, user_id, revives, kills, deaths, caps, elo_delta)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """,
-    (war_id, uid, revives, kills, deaths, caps, total_delta),
-)
+        # --- Логируем изменение рейтинга в той же транзакции ---
+        if delta != 0:
+            await db.execute(
+                """
+                INSERT INTO rating_changes(user_id, delta, reason, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    int(uid),
+                    int(delta),
+                    f"cw:{war_id}",
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+
+        # --- Проверяем повышение/понижение ранга ---
+        await notify_rank_if_changed(uid, old_elo, new_elo)
+
+        # --- Сохраняем статистику игрока для этого КВ ---
+        await db.execute(
+            """
+            INSERT INTO cw_player_stats
+                (war_id, user_id, revives, kills, deaths, caps, elo_delta)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (war_id, uid, revives, kills, deaths, caps, total_delta),
+        )
 
         await notify_rank_if_changed(uid, old_elo, new_elo)
 
