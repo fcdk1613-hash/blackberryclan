@@ -1331,22 +1331,16 @@ def generate_cw_result_image(
     mvp_name: str | None = None,
 ) -> str:
     """
-    Генерация красивой карточки результатов КВ, совместимая с новыми версиями Pillow
-    (без draw.textsize — используется draw.textbbox и draw.textlength).
-
-    Требуемые файлы в папке icons:
-      - backkw.png          — фон
-      - Blackberry logo.png — эмблема клана BB
-      - opponent.png        — эмблема противника
-      - mvp.png             — иконка MVP
-      - skorpo.png / narva.png / gorodok.png / mutaha.png / fallujah.png — логотип карты
+    Генерация карточки результатов КВ (совместимо с Pillow 10+).
     """
     from datetime import datetime
+    import os
+    import re
+    from PIL import Image, ImageDraw, ImageFont
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     icons_dir = os.path.join(base_dir, "icons")
 
-    # --- размеры canvas ---
     width, height = 1280, 720
 
     # --- фон ---
@@ -1355,9 +1349,9 @@ def generate_cw_result_image(
         if os.path.exists(bg_path):
             img = Image.open(bg_path).convert("RGBA").resize((width, height))
         else:
-            img = Image.new("RGBA", (width, height), (15, 0, 35, 255))
+            img = Image.new("RGBA", (15, 0, 35, 255))
     except Exception:
-        img = Image.new("RGBA", (width, height), (15, 0, 35, 255))
+        img = Image.new("RGBA", (15, 0, 35, 255))
 
     draw = ImageDraw.Draw(img)
 
@@ -1371,7 +1365,7 @@ def generate_cw_result_image(
     except Exception:
         title_font = score_font = name_font = small_font = tiny_font = ImageFont.load_default()
 
-    # --- полупрозрачная центральная панель ---
+    # --- центральная панель ---
     panel_margin_x, panel_margin_y = 70, 60
     panel_x0 = panel_margin_x
     panel_y0 = panel_margin_y
@@ -1398,7 +1392,7 @@ def generate_cw_result_image(
     img = Image.alpha_composite(img, panel_layer)
     draw = ImageDraw.Draw(img)
 
-    # --- разбор "BB vs OPPONENT" ---
+    # --- BB vs OPPONENT ---
     opponents = (war.get("opponents") or "").strip() or "BB vs ?"
     bb_tag = "BB"
     enemy_tag = "OPPONENT"
@@ -1415,7 +1409,6 @@ def generate_cw_result_image(
     else:
         enemy_tag = opponents
 
-    # --- заголовок ---
     title = f"{bb_tag} vs {enemy_tag}"
     title_bbox = draw.textbbox((0, 0), title, font=title_font)
     title_w = title_bbox[2] - title_bbox[0]
@@ -1424,44 +1417,7 @@ def generate_cw_result_image(
     title_y = panel_y0 + 18
     draw.text((title_x, title_y), title, font=title_font, fill=(230, 220, 255))
 
-    # --- счёт ---
-    score_text = f"{bb_score} : {opp_score}"
-    score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
-    score_w = score_bbox[2] - score_bbox[0]
-    score_h = score_bbox[3] - score_bbox[1]
-    score_x = panel_x0 + (panel_x1 - panel_x0 - score_w) // 2
-    score_y = title_y + title_h + 15
-    draw.text((score_x, score_y), score_text, font=score_font, fill=(245, 230, 255))
-
-    # --- подпись победителя ---
-    winner_label = (war.get("winner") or "").strip()
-    win_y = score_y + score_h
-    if winner_label:
-        wl = winner_label.lower()
-        if wl.startswith("black"):
-            winner_line = "Победа Blackberry"
-            win_color = (180, 255, 200)
-        elif "против" in wl or "opponent" in wl:
-            winner_line = "Победа противника"
-            win_color = (255, 190, 190)
-        else:
-            winner_line = winner_label
-            win_color = (230, 230, 230)
-
-        winner_bbox = draw.textbbox((0, 0), winner_line, font=small_font)
-        winner_w = winner_bbox[2] - winner_bbox[0]
-        winner_h = winner_bbox[3] - winner_bbox[1]
-        winner_x = panel_x0 + (panel_x1 - panel_x0 - winner_w) // 2
-        win_y = win_y + 10
-        draw.text((winner_x, win_y), winner_line, font=small_font, fill=win_color)
-
-    # --- логотипы кланов ---
-    logo_size = 150
-    mid_x = (panel_x0 + panel_x1) // 2
-    col_spacing = 130
-    left_center_x = mid_x - (logo_size // 2 + col_spacing)
-    right_center_x = mid_x + (logo_size // 2 + col_spacing)
-    logos_y = win_y + 40
+    # --- логотипы кланов + счёт между ними ---
 
     def load_logo(filename: str, size: int) -> Image.Image | None:
         path = os.path.join(icons_dir, filename)
@@ -1474,44 +1430,44 @@ def generate_cw_result_image(
             return None
         return None
 
-    bb_logo = load_logo("Blackberry logo.png", logo_size)
+    logo_size = 150
+    bb_logo = load_logo("logo.png", logo_size)           # <-- тут logo.png
     opp_logo = load_logo("opponent.png", logo_size)
 
-    # подложки под логотипы
-    for cx in (left_center_x, right_center_x):
-        x0 = cx - logo_size // 2
-        y0 = logos_y
-        x1 = cx + logo_size // 2
-        y1 = logos_y + logo_size
-        draw.rectangle((x0, y0, x1, y1), fill=(20, 20, 20))
+    score_text = f"{bb_score} : {opp_score}"
+    score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
+    score_w = score_bbox[2] - score_bbox[0]
+    score_h = score_bbox[3] - score_bbox[1]
 
+    band_top = title_y + title_h + 40
+    mid_x = (panel_x0 + panel_x1) // 2
+
+    # отступ между счётом и логотипом
+    logo_margin = 60
+    # центр логотипа от центра счёта
+    logo_offset = score_w / 2 + logo_margin + logo_size / 2
+
+    # положение по вертикали для логотипов и счёта
+    logo_center_y = band_top + logo_size / 2
+    logos_y = int(logo_center_y - logo_size / 2)
+    score_y = int(logo_center_y - score_h / 2)
+
+    # центры логотипов
+    left_center_x = int(mid_x - logo_offset)
+    right_center_x = int(mid_x + logo_offset)
+
+    # рисуем логотипы без подложек
     if bb_logo is not None:
         img.paste(bb_logo, (left_center_x - logo_size // 2, logos_y), bb_logo)
     if opp_logo is not None:
         img.paste(opp_logo, (right_center_x - logo_size // 2, logos_y), opp_logo)
 
-    # подписи кланов под логотипами
-    names_y = logos_y + logo_size + 8
-    bb_name_bbox = draw.textbbox((0, 0), bb_tag, font=name_font)
-    bb_name_w = bb_name_bbox[2] - bb_name_bbox[0]
-    enemy_name_bbox = draw.textbbox((0, 0), enemy_tag, font=name_font)
-    enemy_name_w = enemy_name_bbox[2] - enemy_name_bbox[0]
+    # сам счёт
+    score_x = mid_x - score_w // 2
+    draw.text((score_x, score_y), score_text, font=score_font, fill=(245, 230, 255))
 
-    draw.text(
-        (left_center_x - bb_name_w / 2, names_y),
-        bb_tag,
-        font=name_font,
-        fill=(230, 220, 255),
-    )
-    draw.text(
-        (right_center_x - enemy_name_w / 2, names_y),
-        enemy_tag,
-        font=name_font,
-        fill=(230, 220, 255),
-    )
-
-    # мелкая подпись со счётом под логотипами
-    scores_y = names_y + 30
+    # маленький текст "XXX очков" под логотипами
+    scores_y = logos_y + logo_size + 8
     bb_small = f"{bb_score} очков"
     opp_small = f"{opp_score} очков"
 
@@ -1533,7 +1489,33 @@ def generate_cw_result_image(
         fill=(255, 200, 200),
     )
 
-    # --- блок MVP ---
+    # --- "Победа ..." немного ниже ---
+    winner_label = (war.get("winner") or "").strip()
+    winner_y = scores_y + 25
+    if winner_label:
+        wl = winner_label.lower()
+        if wl.startswith("black"):
+            winner_line = "Победа Blackberry"
+            win_color = (180, 255, 200)
+        elif "против" in wl or "opponent" in wl:
+            winner_line = "Победа противника"
+            win_color = (255, 190, 190)
+        else:
+            winner_line = winner_label
+            win_color = (230, 230, 230)
+
+        winner_bbox = draw.textbbox((0, 0), winner_line, font=small_font)
+        winner_w = winner_bbox[2] - winner_bbox[0]
+        winner_x = panel_x0 + (panel_x1 - panel_x0 - winner_w) // 2
+        draw.text((winner_x, winner_y), winner_line, font=small_font, fill=win_color)
+
+    # --- блок MVP (без TG ника) ---
+    # режем телеграм-ник в формате " (@xxx)" в конце строки
+    if mvp_name:
+        mvp_clean = re.sub(r"\s*\(@[^)]*\)\s*$", "", mvp_name.strip())
+    else:
+        mvp_clean = "—"
+
     mvp_block_x = panel_x0 + 40
     mvp_block_y = panel_y1 - 130
     mvp_icon_size = 48
@@ -1558,7 +1540,7 @@ def generate_cw_result_image(
             fill=(230, 220, 255),
         )
 
-    mvp_text = f"MVP: {mvp_name or '—'}"
+    mvp_text = f"MVP: {mvp_clean}"
     max_mvp_width = (panel_x1 - panel_x0) // 2
     if draw.textlength(mvp_text, font=small_font) > max_mvp_width:
         while len(mvp_text) > 5 and draw.textlength(mvp_text + "...", font=small_font) > max_mvp_width:
@@ -1574,7 +1556,7 @@ def generate_cw_result_image(
         fill=(230, 220, 255),
     )
 
-    # --- блок карты справа ---
+    # --- блок карты справа внизу ---
     map_name = (war.get("map") or "").strip() or "Неизвестная карта"
     map_block_width = 420
     map_block_height = 200
@@ -1603,7 +1585,7 @@ def generate_cw_result_image(
     img = Image.alpha_composite(img, map_layer)
     draw = ImageDraw.Draw(img)
 
-    # логотип карты (если найдётся)
+    # логотип карты (если есть) + название по центру рамки
     lower_map = map_name.lower()
     map_logo_file = None
     map_logo_map = {
@@ -1618,7 +1600,8 @@ def generate_cw_result_image(
             map_logo_file = filename
             break
 
-    logo_height = 0
+    map_logo = None
+    logo_w = logo_h = 0
     if map_logo_file is not None:
         try:
             logo_path = os.path.join(icons_dir, map_logo_file)
@@ -1628,17 +1611,13 @@ def generate_cw_result_image(
                 max_logo_height = 80
                 map_logo.thumbnail((max_logo_width, max_logo_height), Image.LANCZOS)
                 logo_w, logo_h = map_logo.size
-                logo_x = map_block_x0 + (map_block_width - logo_w) // 2
-                logo_y = map_block_y0 + 8
-                img.paste(map_logo, (logo_x, logo_y), map_logo)
-                logo_height = logo_h
         except Exception:
-            logo_height = 0
+            map_logo = None
+            logo_w = logo_h = 0
 
-    # подпись карты под логотипом
-    map_text_y = map_block_y0 + 8 + (logo_height or 0) + 10
-    max_map_text_width = map_block_width - 20
+    # считаем общую высоту содержимого в рамке
     map_line = map_name
+    max_map_text_width = map_block_width - 40
     if draw.textlength(map_line, font=small_font) > max_map_text_width:
         while len(map_line) > 5 and draw.textlength(map_line + "...", font=small_font) > max_map_text_width:
             map_line = map_line[:-1]
@@ -1647,24 +1626,27 @@ def generate_cw_result_image(
     map_text_bbox = draw.textbbox((0, 0), map_line, font=small_font)
     map_text_w = map_text_bbox[2] - map_text_bbox[0]
     map_text_h = map_text_bbox[3] - map_text_bbox[1]
+
+    spacing = 10 if map_logo is not None else 0
+    total_h = logo_h + spacing + map_text_h
+    start_y = map_block_y0 + (map_block_height - total_h) // 2
+
+    # картинка карты
+    if map_logo is not None:
+        logo_x = map_block_x0 + (map_block_width - logo_w) // 2
+        logo_y = start_y
+        img.paste(map_logo, (logo_x, logo_y), map_logo)
+        text_y = logo_y + logo_h + spacing
+    else:
+        text_y = start_y
+
+    # название карты по центру
     map_text_x = map_block_x0 + (map_block_width - map_text_w) // 2
     draw.text(
-        (map_text_x, map_text_y),
+        (map_text_x, text_y),
         map_line,
         font=small_font,
         fill=(230, 220, 255),
-    )
-
-    # подпись "Карта"
-    label = "Карта"
-    lbl_bbox = draw.textbbox((0, 0), label, font=tiny_font)
-    lbl_w = lbl_bbox[2] - lbl_bbox[0]
-    lbl_h = lbl_bbox[3] - lbl_bbox[1]
-    draw.text(
-        (map_block_x0 + 10, map_block_y1 - lbl_h - 6),
-        label,
-        font=tiny_font,
-        fill=(180, 160, 255),
     )
 
     # --- сохраняем результат ---
