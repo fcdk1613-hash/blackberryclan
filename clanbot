@@ -1774,6 +1774,8 @@ def generate_cw_result_image(
         "gorodok": "gorodok.png",
         "mutaha": "mutaha.png",
         "fallujah": "fallujah.png",
+        "chora": "chora.png",
+        "logar": "logar.png",
     }
     for key, filename in map_logo_map.items():
         if key in lower_map:
