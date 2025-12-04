@@ -1110,6 +1110,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     timezone_val = user.get("timezone") or "—"
     tg_id = user.get("user_id") or "-"
     elo = user.get("elo_rating") or 1000
+    elo_int = int(elo)
     rank_name, rank_color = get_rank(elo)
 
     cw_wins = user.get("cw_wins") or 0
@@ -1261,7 +1262,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
             pass
 
     # Текст Elo и ранга
-    draw.text((text_x, text_y), f"Elo: {elo} BBP", font=subtitle_font, fill=(255, 255, 255))
+    draw.text((text_x, text_y), f"Elo: {elo_int} BBP", font=subtitle_font, fill=(255, 255, 255))
     text_y += 40
 
     # Убираем эмодзи из rank_name, оставляем только текстовую часть
@@ -2989,10 +2990,11 @@ async def cmd_profile(message: Message):
 
     # Подпись под картинкой — короткое резюме + история турниров
     elo = user.get("elo_rating") or 1000
+    elo_int = int(elo)
     rank_name, _ = get_rank(elo)
     caption_lines = [
         "<b>Ваш профиль</b>",
-        f"🏅 Elo: <code>{elo} BBP</code>",
+        f"🏅 Elo: <code>{elo_int} BBP</code>",
         f"🎖 Ранг: <b>{rank_name}</b>",
     ]
     if pos:
