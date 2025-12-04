@@ -812,11 +812,12 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
 
     # Текущее место в клане
     elo = user.get("elo_rating") or 1000
+    elo_int = int(elo)
     rank_name, color = get_rank(elo)
-    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo} BBP</code>")
+    lines.append(f"\n<b>🏅 Elo-рейтинг:</b> <code>{elo_int} BBP</code>")
     lines.append(f'<b>🎖 Ранг:</b> <b>{rank_name}</b>')
     if pos:
-        lines.append(f"📊 Место в клане: <b>#{pos}</b>")
+        lines.append(f"📊 Место в клане: {pos}")
 
 # История турниров — история передаётся в аргументе `history`
     if history:
