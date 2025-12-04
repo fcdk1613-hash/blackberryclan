@@ -3866,18 +3866,58 @@ async def cmd_train_stats(message: Message):
     if not date_to:
         date_str = date_from
         async with aiosqlite.connect(DB_PATH) as db:
-            # aggregate yes/no/late
-            cur = await db.execute("SELECT response, COUNT(*) FROM training_attendance WHERE date=? GROUP BY response", (date_str,))
+            # aggregate yes/no/late (только не-Резерв)
+            cur = await db.execute(
+                """
+                SELECT t.response, COUNT(*)
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                GROUP BY t.response
+                """,
+                (date_str,),
+            )
             agg = {row[0]: row[1] for row in await cur.fetchall()}
-            # details for no/late
-            cur = await db.execute("SELECT user_id, response, reason FROM training_attendance WHERE date=? AND response IN ('no','late')", (date_str,))
+
+            # details for no/late (только не-Резерв)
+            cur = await db.execute(
+                """
+                SELECT t.user_id, t.response, t.reason
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND t.response IN ('no','late')
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                """,
+                (date_str,),
+            )
             details = await cur.fetchall()
-            # joined users
-            cur = await db.execute("SELECT user_id, nickname, tg_link FROM users WHERE status = ?", ("joined",))
+
+            # joined users (только не-Резерв)
+            cur = await db.execute(
+                """
+                SELECT user_id, nickname, tg_link
+                FROM users
+                WHERE status = ?
+                  AND (faction IS NULL OR faction != 'Резерв')
+                """,
+                ("joined",),
+            )
             joined_users = await cur.fetchall()
             all_joined_ids = {u[0] for u in joined_users}
-            # answered set
-            cur = await db.execute("SELECT DISTINCT user_id FROM training_attendance WHERE date=?", (date_str,))
+
+            # answered set (только не-Резерв, для согласованности)
+            cur = await db.execute(
+                """
+                SELECT DISTINCT t.user_id
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                """,
+                (date_str,),
+            )
             answered_ids = {r[0] for r in await cur.fetchall()}
 
         not_answered = [(uid, nick, link) for uid, nick, link in joined_users if uid not in answered_ids]
