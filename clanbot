@@ -217,6 +217,23 @@ FACTIONS = {
     "reserve": "Резерв",
 }
 
+CLAN_TITLES: list[str] = [
+    "Рекрут",
+    "Рядовой",
+    "Рядовой 1кл.",
+    "Капрал",
+    "Сержант",
+    "Штаб-сержант",
+    "Сержант 1кл.",
+    "Мастер-Сержант",
+    "Мл. Лейтенант",
+    "Лейтенант",
+    "Капитан",
+    "Майор",
+    "Полковник",
+    "Генерал",
+]
+
 # ======= ELO / RANKS =======
 
 RANKS = [
@@ -335,6 +352,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN birth_date TEXT",
             "ALTER TABLE users ADD COLUMN faction TEXT",
             "ALTER TABLE users ADD COLUMN clan_id INTEGER",
+            "ALTER TABLE users ADD COLUMN clan_title TEXT",
             "ALTER TABLE users ADD COLUMN elo_rating INTEGER DEFAULT 1000",
             "ALTER TABLE users ADD COLUMN elo_rank TEXT DEFAULT 'None",
             "ALTER TABLE users ADD COLUMN cw_revives INTEGER DEFAULT 0",
@@ -737,6 +755,14 @@ def faction_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.adjust(1).as_markup()
 
+def rank_choose_kb(user_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for idx, title in enumerate(CLAN_TITLES):
+        kb.button(text=title, callback_data=f"rank:set:{user_id}:{idx}")
+        kb.row()
+    kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
+    return kb.adjust(1).as_markup()
+
 def approve_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
@@ -752,6 +778,8 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="Дата рождения", callback_data=f"edit:field:{user_id}:birth_date")
     kb.button(text="Часовой пояс", callback_data=f"edit:field:{user_id}:timezone")
     kb.button(text="Личный TG", callback_data=f"edit:field:{user_id}:tg_link")
+    kb.row()
+    kb.button(text="Звание", callback_data=f"edit:rank:{user_id}")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.adjust(1).as_markup()
@@ -773,12 +801,13 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
         ("Часовой пояс", user.get("timezone")),
         ("Личный TG", user.get("tg_link")),
         ("Фракция", user.get("faction")),
+        ("Звание", user.get("clan_title")),
         ("Статус", user.get("status")),
         ("Создан", user.get("created_at")),
         ("Заявка", user.get("applied_at")),
         ("Одобрен", user.get("approved_at")),
         ("Резерв до", user.get("reserve_until")),
-        ]
+    ]
     for k, v in fields:
         if v not in (None, "", "None"):
             lines.append(f"{k}: {v}")
@@ -1107,6 +1136,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     nickname = user.get("nickname") or "Без ника"
     clan_id = pad_clan_id(user.get("clan_id"))
     faction = user.get("faction") or "—"
+    clan_title = user.get("clan_title") or "—"
     timezone_val = user.get("timezone") or "—"
     tg_id = user.get("user_id") or "-"
     elo = user.get("elo_rating") or 1000
@@ -1210,6 +1240,15 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         font=subtitle_font,
         fill=(220, 220, 220),
     )
+
+    y += 32
+    draw.text(
+        (x, y),
+        f"Звание: {clan_title}",
+        font=subtitle_font,
+        fill=(220, 220, 220),
+    )
+
    # Блок Elo / ранга в правом верхнем углу
     ELO_BLOCK_WIDTH = 340   # увеличенная ширина под иконку + текст
     ELO_BLOCK_HEIGHT = 150  # немного выше стандартного блока
@@ -2716,6 +2755,98 @@ async def on_edit_init(call: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await call.answer()
+
+@dp.callback_query(F.data.startswith("edit:rank:"))
+async def on_edit_rank(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    try:
+        _, _, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    text = format_profile(user, title="Редактирование звания")
+    try:
+        await call.message.edit_text(
+            text + "\n\nВыберите звание:",
+            reply_markup=rank_choose_kb(target_id),
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("rank:set:"))
+async def on_rank_set(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    try:
+        _, _, uid_str, idx_str = call.data.split(":")
+        target_id = int(uid_str)
+        idx = int(idx_str)
+        if idx < 0 or idx >= len(CLAN_TITLES):
+            raise ValueError("bad idx")
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    title = CLAN_TITLES[idx]
+
+    # Сохраняем звание в БД
+    await upsert_user(target_id, clan_title=title)
+    user = await get_user(target_id)
+
+    # Уведомление игроку о новом звании
+    try:
+        await bot.send_message(
+            target_id,
+            f'Твое звание изменено. Теперь ты "{title}"!',
+        )
+    except Exception:
+        pass
+
+    # Лог модераторского действия
+    try:
+        await log_mod_action(
+            actor_id=call.from_user.id,
+            action="Изменение звания",
+            target_id=target_id,
+            extra=f"Новое звание: {title}",
+        )
+    except Exception:
+        pass
+
+    # Обновляем админскую карточку профиля
+    if user:
+        try:
+            await call.message.edit_text(
+                format_profile(
+                    user,
+                    history=await get_tournament_history(int(user.get("user_id"))),
+                ),
+                reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id),
+            )
+        except Exception:
+            try:
+                await call.message.answer(
+                    format_profile(
+                        user,
+                        history=await get_tournament_history(int(user.get("user_id"))),
+                    ),
+                    reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id),
+                )
+            except Exception:
+                pass
+
+    await call.answer(f"Звание установлено: {title}")
 
 @dp.callback_query(F.data.startswith("edit:field:"))
 async def on_edit_field(call: CallbackQuery, state: FSMContext):
