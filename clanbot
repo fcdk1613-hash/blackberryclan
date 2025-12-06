@@ -2808,7 +2808,7 @@ async def on_rank_set(call: CallbackQuery):
     try:
         await bot.send_message(
             target_id,
-            f'Твое звание изменено. Теперь ты "{title}"!',
+            f'💥Твое звание изменено. Теперь ты <b>{title}</b>!',
         )
     except Exception:
         pass
