@@ -1127,6 +1127,55 @@ def get_rank_icon_path(rank_name: str) -> str | None:
     path = os.path.join(icons_dir, filename)
     return path if os.path.exists(path) else None
 
+def get_title_icon_path(clan_title: str) -> str | None:
+    """
+    Возвращает путь к PNG-иконке звания из папки icons рядом с файлом бота.
+    Имена файлов нужно создать самостоятельно, например:
+      Рекрут         -> title_recruit.png
+      Рядовой        -> title_private.png
+      Рядовой 1кл.   -> title_private1.png
+      Капрал         -> title_corporal.png
+      Сержант        -> title_sergeant.png
+      Штаб-сержант   -> title_staffsgt.png
+      Сержант 1кл.   -> title_sergeant1.png
+      Мастер-Сержант -> title_mastersgt.png
+      Мл. Лейтенант  -> title_ltjunior.png
+      Лейтенант      -> title_lt.png
+      Капитан        -> title_captain.png
+      Майор          -> title_major.png
+      Полковник      -> title_colonel.png
+      Генерал        -> title_general.png
+    """
+    if not clan_title:
+        return None
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    icons_dir = os.path.join(base_dir, "icons")
+
+    mapping = {
+        "Рекрут": "title_recruit.png",
+        "Рядовой": "title_private.png",
+        "Рядовой 1кл.": "title_private1.png",
+        "Капрал": "title_corporal.png",
+        "Сержант": "title_sergeant.png",
+        "Штаб-сержант": "title_staffsgt.png",
+        "Сержант 1кл.": "title_sergeant1.png",
+        "Мастер-Сержант": "title_mastersgt.png",
+        "Мл. Лейтенант": "title_ltjunior.png",
+        "Лейтенант": "title_lt.png",
+        "Капитан": "title_captain.png",
+        "Майор": "title_major.png",
+        "Полковник": "title_colonel.png",
+        "Генерал": "title_general.png",
+    }
+
+    filename = mapping.get(clan_title)
+    if not filename:
+        return None
+
+    path = os.path.join(icons_dir, filename)
+    return path if os.path.exists(path) else None
+
 def generate_profile_card_image(user: dict, history: list | None = None, pos: int | None = None) -> str:
     """
     Генерирует PNG-картинку профиля игрока и возвращает путь к сохранённому файлу.
@@ -1320,6 +1369,29 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         font=text_font,
         fill=(220, 220, 220),
     )
+
+    # Иконка звания под блоком Elo
+    title_icon_path = get_title_icon_path(clan_title)
+    if title_icon_path and os.path.exists(title_icon_path):
+        try:
+            TITLE_ICON_SIZE = 80  # достаточно крупно, но не перекрывает блоки
+            title_icon = Image.open(title_icon_path).convert("RGBA")
+            title_icon = title_icon.resize((TITLE_ICON_SIZE, TITLE_ICON_SIZE), Image.LANCZOS)
+
+            # Центрируем иконку по горизонтали относительно блока Elo
+            title_icon_x = elo_block_x + (ELO_BLOCK_WIDTH - TITLE_ICON_SIZE) // 2
+            # Ставим иконку сразу под блоком Elo
+            title_icon_y = elo_block_y + ELO_BLOCK_HEIGHT + 10
+
+            # На всякий случай не даём ей выйти за нижнюю границу панели
+            max_title_y = panel_y1 - TITLE_ICON_SIZE - 20
+            if title_icon_y > max_title_y:
+                title_icon_y = max_title_y
+
+            img.paste(title_icon, (title_icon_x, title_icon_y), title_icon)
+        except Exception:
+            # Если что-то пойдёт не так с картинкой, просто пропускаем
+            pass
 
     # Блок статистики КВ
     stats_x = panel_x0 + 30
