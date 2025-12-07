@@ -1370,15 +1370,16 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         fill=(220, 220, 220),
     )
 
-    # Иконка звания/бойца под блоком Elo, растягиваем между Elo и низом панели
+    # Иконка звания/бойца под блоком Elo, максимально заполняем пространство до низа панели
     title_icon_path = get_title_icon_path(clan_title)
     if title_icon_path and os.path.exists(title_icon_path):
         try:
             title_icon = Image.open(title_icon_path).convert("RGBA")
 
-            # Вертикальные границы: сразу под ELO-блоком и чуть выше низа панели
-            top_limit = elo_block_y + ELO_BLOCK_HEIGHT + 5   # почти упирается "головой" в блок
-            bottom_limit = panel_y1 - 15                     # небольшой отступ от низа рамки
+            # Верхняя граница — сразу под ELO-блоком,
+            # нижняя — практически у самой рамки панели
+            top_limit = elo_block_y + ELO_BLOCK_HEIGHT + 5
+            bottom_limit = panel_y1 - 2  # прижимаем "ногами" к низу панели
 
             # Доступная высота под картинку
             available_height = max(bottom_limit - top_limit, 40)
@@ -1403,7 +1404,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
             # Прижимаем "ногами" к низу панели
             title_icon_y = bottom_limit - new_h
 
-            # На всякий случай гарантируем, что голова не залезет выше top_limit
+            # На всякий случай, если вдруг иконка получилась выше доступного диапазона
             if title_icon_y < top_limit:
                 title_icon_y = top_limit
 
