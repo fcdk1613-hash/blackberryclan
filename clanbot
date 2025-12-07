@@ -1370,23 +1370,42 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         fill=(220, 220, 220),
     )
 
-    # Иконка звания под блоком Elo
+    # Иконка звания/бойца под блоком Elo, растягиваем между Elo и низом панели
     title_icon_path = get_title_icon_path(clan_title)
     if title_icon_path and os.path.exists(title_icon_path):
         try:
-            TITLE_ICON_SIZE = 80  # достаточно крупно, но не перекрывает блоки
             title_icon = Image.open(title_icon_path).convert("RGBA")
-            title_icon = title_icon.resize((TITLE_ICON_SIZE, TITLE_ICON_SIZE), Image.LANCZOS)
 
-            # Центрируем иконку по горизонтали относительно блока Elo
-            title_icon_x = elo_block_x + (ELO_BLOCK_WIDTH - TITLE_ICON_SIZE) // 2
-            # Ставим иконку сразу под блоком Elo
-            title_icon_y = elo_block_y + ELO_BLOCK_HEIGHT + 10
+            # Вертикальные границы: сразу под ELO-блоком и чуть выше низа панели
+            top_limit = elo_block_y + ELO_BLOCK_HEIGHT + 5   # почти упирается "головой" в блок
+            bottom_limit = panel_y1 - 15                     # небольшой отступ от низа рамки
 
-            # На всякий случай не даём ей выйти за нижнюю границу панели
-            max_title_y = panel_y1 - TITLE_ICON_SIZE - 20
-            if title_icon_y > max_title_y:
-                title_icon_y = max_title_y
+            # Доступная высота под картинку
+            available_height = max(bottom_limit - top_limit, 40)
+
+            # Масштабируем по высоте, сохраняя пропорции
+            orig_w, orig_h = title_icon.size
+            scale = available_height / float(orig_h)
+            new_h = int(orig_h * scale)
+            new_w = int(orig_w * scale)
+
+            # Не даём выйти по ширине за пределы блока Elo
+            max_width = ELO_BLOCK_WIDTH - 20
+            if new_w > max_width:
+                scale = max_width / float(orig_w)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+
+            title_icon = title_icon.resize((new_w, new_h), Image.LANCZOS)
+
+            # Центрируем по горизонтали относительно блока Elo
+            title_icon_x = elo_block_x + (ELO_BLOCK_WIDTH - new_w) // 2
+            # Прижимаем "ногами" к низу панели
+            title_icon_y = bottom_limit - new_h
+
+            # На всякий случай гарантируем, что голова не залезет выше top_limit
+            if title_icon_y < top_limit:
+                title_icon_y = top_limit
 
             img.paste(title_icon, (title_icon_x, title_icon_y), title_icon)
         except Exception:
