@@ -1127,55 +1127,6 @@ def get_rank_icon_path(rank_name: str) -> str | None:
     path = os.path.join(icons_dir, filename)
     return path if os.path.exists(path) else None
 
-def get_title_icon_path(clan_title: str) -> str | None:
-    """
-    Возвращает путь к PNG-иконке звания из папки icons рядом с файлом бота.
-    Имена файлов нужно создать самостоятельно, например:
-      Рекрут         -> title_recruit.png
-      Рядовой        -> title_private.png
-      Рядовой 1кл.   -> title_private1.png
-      Капрал         -> title_corporal.png
-      Сержант        -> title_sergeant.png
-      Штаб-сержант   -> title_staffsgt.png
-      Сержант 1кл.   -> title_sergeant1.png
-      Мастер-Сержант -> title_mastersgt.png
-      Мл. Лейтенант  -> title_ltjunior.png
-      Лейтенант      -> title_lt.png
-      Капитан        -> title_captain.png
-      Майор          -> title_major.png
-      Полковник      -> title_colonel.png
-      Генерал        -> title_general.png
-    """
-    if not clan_title:
-        return None
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    icons_dir = os.path.join(base_dir, "icons")
-
-    mapping = {
-        "Рекрут": "title_recruit.png",
-        "Рядовой": "title_private.png",
-        "Рядовой 1кл.": "title_private1.png",
-        "Капрал": "title_corporal.png",
-        "Сержант": "title_sergeant.png",
-        "Штаб-сержант": "title_staffsgt.png",
-        "Сержант 1кл.": "title_sergeant1.png",
-        "Мастер-Сержант": "title_mastersgt.png",
-        "Мл. Лейтенант": "title_ltjunior.png",
-        "Лейтенант": "title_lt.png",
-        "Капитан": "title_captain.png",
-        "Майор": "title_major.png",
-        "Полковник": "title_colonel.png",
-        "Генерал": "title_general.png",
-    }
-
-    filename = mapping.get(clan_title)
-    if not filename:
-        return None
-
-    path = os.path.join(icons_dir, filename)
-    return path if os.path.exists(path) else None
-
 def generate_profile_card_image(user: dict, history: list | None = None, pos: int | None = None) -> str:
     """
     Генерирует PNG-картинку профиля игрока и возвращает путь к сохранённому файлу.
@@ -1369,49 +1320,6 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
         font=text_font,
         fill=(220, 220, 220),
     )
-
-    # Иконка звания/бойца под блоком Elo, максимально заполняем пространство до низа панели
-    title_icon_path = get_title_icon_path(clan_title)
-    if title_icon_path and os.path.exists(title_icon_path):
-        try:
-            title_icon = Image.open(title_icon_path).convert("RGBA")
-
-            # Верхняя граница — сразу под ELO-блоком,
-            # нижняя — практически у самой рамки панели
-            top_limit = elo_block_y + ELO_BLOCK_HEIGHT + 5
-            bottom_limit = panel_y1 - 2  # прижимаем "ногами" к низу панели
-
-            # Доступная высота под картинку
-            available_height = max(bottom_limit - top_limit, 40)
-
-            # Масштабируем по высоте, сохраняя пропорции
-            orig_w, orig_h = title_icon.size
-            scale = available_height / float(orig_h)
-            new_h = int(orig_h * scale)
-            new_w = int(orig_w * scale)
-
-            # Не даём выйти по ширине за пределы блока Elo
-            max_width = ELO_BLOCK_WIDTH - 20
-            if new_w > max_width:
-                scale = max_width / float(orig_w)
-                new_w = int(orig_w * scale)
-                new_h = int(orig_h * scale)
-
-            title_icon = title_icon.resize((new_w, new_h), Image.LANCZOS)
-
-            # Центрируем по горизонтали относительно блока Elo
-            title_icon_x = elo_block_x + (ELO_BLOCK_WIDTH - new_w) // 2
-            # Прижимаем "ногами" к низу панели
-            title_icon_y = bottom_limit - new_h
-
-            # На всякий случай, если вдруг иконка получилась выше доступного диапазона
-            if title_icon_y < top_limit:
-                title_icon_y = top_limit
-
-            img.paste(title_icon, (title_icon_x, title_icon_y), title_icon)
-        except Exception:
-            # Если что-то пойдёт не так с картинкой, просто пропускаем
-            pass
 
     # Блок статистики КВ
     stats_x = panel_x0 + 30
