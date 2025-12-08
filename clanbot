@@ -169,6 +169,14 @@ CREATE TABLE IF NOT EXISTS cw_player_stats (
     FOREIGN KEY (war_id) REFERENCES cw_wars(id) ON DELETE CASCADE
 );
 """
+CREATE_USER_ROLES_SQL = """
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id INTEGER NOT NULL,
+    role_code TEXT NOT NULL,
+    opened_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, role_code)
+);
+"""
 CREATE_MOD_ACTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS mod_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,6 +241,160 @@ CLAN_TITLES: list[str] = [
     "Полковник",
     "Генерал",
 ]
+
+# ======= CLAN ROLES (BLOCK SCHEME, ТЕКУЩИЕ ВЕТКИ) =======
+
+# ВНИМАНИЕ:
+# - ключи (code) — внутренние ID, ими оперирует бот
+# - значения — то, что видит игрок
+# - некоторые названия повторяются, но kоды разные (разные места в схеме)
+
+ROLE_TITLES: dict[str, str] = {
+    # Общий корень
+    "recruit": "Рекрут",
+
+    # Ветка Мехвод-наводчик
+    "mech_nav": "Мехвод-наводчик",
+    "mech_nav_school": "Мехвод-наводчик(школа)",
+    "mech_nav_driver_gunner": "Мехвод, наводчик",
+    "mech_nav_squad_leader": "Мехвод-наводчик Командир отряда",
+    "mech_nav_tactics": "Обучение тактике тех.",
+    "crew_cmd_profile": "Командир экипажа(профильный)",
+    "crew_cmd_instr": "Командир экипажа(инструктор)",
+    "to_infantry": "Перевод в пехоту",  # общий узел, к нему сходятся две ветки
+    "officer_school": "Офицерская школа",
+    "leadership": "Руководящий состав",
+    "asst_squad_leader": "Зам.ком. отделения",
+    "squad_leader": "Командир отделения",
+    "asst_faction_leader": "Зам.ком. фракции",
+    "faction_leader": "Командир фракции",
+
+    # Ветка Стрелок-медик-труба (под рекрутом)
+    "medic_tube_root": "Стрелок-медик-труба",
+    "medic_tube_school": "Стрелок-медик-труба(школа)",
+    "medic": "Стрелок-медик",
+    "tube": "Труба",
+    "squad_sergeant_cadet": "Командир отряда Сержант(Курсант)",
+    "squad_instr": "Командир отряда(Инструктор)",
+    "to_tech": "Перевод в тех",
+    "squad_brigadier": "Командир отряда(бригадир)",
+    "squad_replace_root": "Командир отряда(Замена)",  # под рекрутом
+    "cmd_replace": "ЦМД(Замена)",
+    "cmd_profile": "ЦМД(профильный)",
+    "cmd_instr": "ЦМД Инструктор",
+
+    # Ветка Сержантская школа (СЛ)
+    "sergeant_school_sl": "Сержантская школа(СЛ)",
+    "medic_tube_from_sl": "Стрелок-медик-труба",        # отдельный узел
+    "squad_profile_sl": "Командир отряда(профильный)",  # отдельный узел
+    "cmd_replace_sl": "ЦМД(Замена)",                    # отдельный узел
+
+    # Заглушки для будущих веток (пока без продолжения)
+    "light_specs": "Легкие специалисты",
+    "heavy_specs": "Тяжелые специалисты",
+}
+
+# Порядок вывода (используем в общем списке, если надо)
+ROLE_ORDER: list[str] = [
+    "recruit",
+    "mech_nav",
+    "mech_nav_school",
+    "mech_nav_driver_gunner",
+    "mech_nav_squad_leader",
+    "mech_nav_tactics",
+    "crew_cmd_profile",
+    "crew_cmd_instr",
+    "to_infantry",
+    "officer_school",
+    "leadership",
+    "asst_squad_leader",
+    "squad_leader",
+    "asst_faction_leader",
+    "faction_leader",
+    "medic_tube_root",
+    "medic_tube_school",
+    "medic",
+    "tube",
+    "squad_sergeant_cadet",
+    "squad_instr",
+    "to_tech",
+    "squad_brigadier",
+    "squad_replace_root",
+    "cmd_replace",
+    "cmd_profile",
+    "cmd_instr",
+    "sergeant_school_sl",
+    "medic_tube_from_sl",
+    "squad_profile_sl",
+    "cmd_replace_sl",
+    "light_specs",
+    "heavy_specs",
+]
+
+# ГРАФ РОЛЕЙ ПО ТЕКУЩЕЙ БЛОК-СХЕМЕ (ТОЛЬКО ТО, ЧТО МЫ УЖЕ РАСПИСАЛИ)
+# parent -> [children]
+
+ROLE_GRAPH: dict[str, list[str]] = {
+    # Корень
+    "recruit": ["mech_nav", "medic_tube_root"],
+
+    # Мехвод-наводчик
+    "mech_nav": ["mech_nav_school", "mech_nav_squad_leader", "mech_nav_tactics"],
+    "mech_nav_school": ["mech_nav_driver_gunner"],
+    "mech_nav_driver_gunner": [],  # пока конец
+    "mech_nav_squad_leader": [],   # "нет" по твоим словам
+    "mech_nav_tactics": ["crew_cmd_profile"],
+    "crew_cmd_profile": ["crew_cmd_instr"],
+    "crew_cmd_instr": ["to_infantry", "officer_school"],
+    "to_infantry": [],  # общий конечный узел
+    "officer_school": ["leadership"],
+    "leadership": ["asst_squad_leader"],
+    "asst_squad_leader": ["squad_leader"],
+    "squad_leader": ["asst_faction_leader", "to_infantry"],
+    "asst_faction_leader": ["faction_leader"],
+    "faction_leader": [],
+
+    # Стрелок-медик-труба (под рекрутом)
+    "medic_tube_root": [
+        "medic_tube_school",
+        "squad_replace_root",
+        "sergeant_school_sl",
+        "light_specs",
+        "heavy_specs",
+    ],
+    "medic_tube_school": ["medic", "tube"],
+    "medic": ["squad_sergeant_cadet"],
+    "tube": ["squad_sergeant_cadet"],
+    "squad_sergeant_cadet": ["squad_instr", "cmd_replace"],
+    "squad_instr": ["to_tech", "squad_brigadier"],
+    "to_tech": [],
+    "squad_brigadier": [],
+    "squad_replace_root": [],  # "Командир отряда(Замена)" под рекрутом как конечный
+    "cmd_replace": ["cmd_profile"],
+    "cmd_profile": ["cmd_instr"],
+    "cmd_instr": [],
+
+    # Сержантская школа (СЛ)
+    "sergeant_school_sl": ["medic_tube_from_sl", "squad_profile_sl"],
+    "medic_tube_from_sl": ["squad_profile_sl"],
+    "squad_profile_sl": ["cmd_replace_sl"],
+    "cmd_replace_sl": [],
+
+    # Заглушки на будущее
+    "light_specs": [],
+    "heavy_specs": [],
+}
+
+# Родители считаем автоматически (на основе ROLE_GRAPH)
+ROLE_PARENTS: dict[str, list[str]] = {}
+for parent, children in ROLE_GRAPH.items():
+    for child in children:
+        ROLE_PARENTS.setdefault(child, []).append(parent)
+
+def get_role_title(code: str | None) -> str:
+    if not code:
+        return "—"
+    return ROLE_TITLES.get(code, code)
 
 # ======= ELO / RANKS =======
 
@@ -339,6 +501,7 @@ async def init_db():
         await db.execute(CREATE_CW_WARS_SQL)
         await db.execute(CREATE_CW_REGS_SQL)
         await db.execute(CREATE_CW_PLAYER_STATS_SQL)  # <-- НОВОЕ
+        await db.execute(CREATE_USER_ROLES_SQL) 
         await db.execute(CREATE_MOD_ACTIONS_SQL)
         await db.execute(CREATE_RATING_CHANGES_SQL)
         await db.execute("PRAGMA journal_mode=WAL;")
@@ -361,6 +524,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN cw_capture_points INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN cw_mvp_count INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN cw_mvp_list TEXT",
+            "ALTER TABLE users ADD COLUMN current_role TEXT",
         ]:
             try:
                 await db.execute(alter)
@@ -441,6 +605,33 @@ async def get_user(user_id: int) -> Optional[dict]:
             return None
         columns = [col[0] for col in cur.description]
         return dict(zip(columns, row))
+
+# ======= ROLES DB HELPERS =======
+
+async def get_user_roles(user_id: int) -> list[str]:
+    """Список кодов ролей, уже открытых игроком."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT role_code FROM user_roles WHERE user_id=?",
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+async def add_user_role(user_id: int, role_code: str) -> None:
+    """Пометить роль как открытую (idempotent)."""
+    ts = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO user_roles(user_id, role_code, opened_at) VALUES (?,?,?)",
+            (user_id, role_code, ts),
+        )
+        await db.commit()
+
+async def set_user_current_role(user_id: int, role_code: str) -> None:
+    """Установить текущую роль и пометить её как открытую."""
+    await add_user_role(user_id, role_code)
+    await upsert_user(user_id, current_role=role_code)
 
 async def get_user_by_username(username: str) -> Optional[dict]:
     uname = username.lstrip("@")
@@ -763,6 +954,54 @@ def rank_choose_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.adjust(1).as_markup()
 
+def roles_choose_kb(user_id: int, opened: set[str], current_role: str | None) -> InlineKeyboardMarkup:
+    """
+    ДЕРЕВО ролей.
+    Показывает только:
+    - текущую роль
+    - родителей (⬆)
+    - детей (⬇)
+    На кнопках отображается: открыто ли, является ли текущей.
+    """
+
+    kb = InlineKeyboardBuilder()
+
+    # Если роли ещё нет — начинаем с рекрута
+    if not current_role or current_role not in ROLE_TITLES:
+        current_role = "recruit"
+
+    parents = ROLE_PARENTS.get(current_role, [])
+    children = ROLE_GRAPH.get(current_role, [])
+
+    # === Родители (движение вверх) ===
+    for code in parents:
+        opened_mark = "🟩 открыто" if code in opened else "⬛ не открыто"
+        kb.button(
+            text=f"⬆ {get_role_title(code)} — {opened_mark}",
+            callback_data=f"role:set:{user_id}:{code}",
+        )
+        kb.row()
+
+    # === Текущая роль (не кнопка смены) ===
+    opened_mark = "🟩 открыто" if current_role in opened else "⬛ не открыто"
+    kb.button(
+        text=f"🔹 {get_role_title(current_role)} — {opened_mark} (текущая)",
+        callback_data=f"noop",
+    )
+    kb.row()
+
+    # === Дети (вниз по ветке) ===
+    for code in children:
+        opened_mark = "🟩 открыто" if code in opened else "⬛ не открыто"
+        kb.button(
+            text=f"⬇ {get_role_title(code)} — {opened_mark}",
+            callback_data=f"role:set:{user_id}:{code}",
+        )
+        kb.row()
+
+    kb.button(text="⬅️ Назад", callback_data=f"profile_back:{user_id}")
+    return kb.adjust(1).as_markup()
+
 def approve_kb(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
@@ -780,6 +1019,7 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="Личный TG", callback_data=f"edit:field:{user_id}:tg_link")
     kb.row()
     kb.button(text="Звание", callback_data=f"edit:rank:{user_id}")
+    kb.button(text="Роли", callback_data=f"edit:roles:{user_id}")
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.adjust(1).as_markup()
@@ -802,6 +1042,7 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
         ("Личный TG", user.get("tg_link")),
         ("Фракция", user.get("faction")),
         ("Звание", user.get("clan_title")),
+        ("Роль", get_role_title(user.get("current_role"))),
         ("Статус", user.get("status")),
         ("Создан", user.get("created_at")),
         ("Заявка", user.get("applied_at")),
@@ -2782,6 +3023,91 @@ async def on_edit_rank(call: CallbackQuery):
     except Exception:
         pass
     await call.answer()
+
+@dp.callback_query(F.data.startswith("edit:roles:"))
+async def on_edit_roles(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    try:
+        _, _, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    opened_list = await get_user_roles(target_id)
+    opened = set(opened_list)
+    current_role = user.get("current_role")
+
+    text = format_profile(user, title="Редактирование ролей")
+    try:
+        await call.message.edit_text(
+            text + "\n\nВыберите роль (открыто/не открыто):",
+            reply_markup=roles_choose_kb(target_id, opened, current_role),
+        )
+    except Exception:
+        # На всякий случай не падаем
+        pass
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("role:set:"))
+async def on_role_set(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    try:
+        _, _, uid_str, role_code = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Ошибка данных.", show_alert=True)
+        return
+
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    current_role = user.get("current_role") or "recruit"
+
+    # Разрешённые переходы: родительский и дочерний слой
+    allowed = set(ROLE_GRAPH.get(current_role, []))          # дети
+    allowed.update(ROLE_PARENTS.get(current_role, []))       # родители
+    allowed.add(current_role)                                # текущая (разрешаем повтор)
+
+    if role_code not in allowed:
+        await call.answer("Переход запрещён блок-схемой.", show_alert=True)
+        return
+
+    # Устанавливаем роль
+    await set_user_current_role(target_id, role_code)
+    opened = set(await get_user_roles(target_id))
+
+    # Обновляем меню
+    try:
+        await call.message.edit_text(
+            format_profile(user, title="Редактирование ролей"),
+            reply_markup=roles_choose_kb(target_id, opened, role_code),
+        )
+    except Exception:
+        pass
+
+    # Уведомление пользователю
+    try:
+        await bot.send_message(
+            target_id,
+            f"🎖 Ваша роль изменена: <b>{get_role_title(role_code)}</b>",
+        )
+    except:
+        pass
+
+    await call.answer("Роль обновлена.")
 
 @dp.callback_query(F.data.startswith("rank:set:"))
 async def on_rank_set(call: CallbackQuery):
