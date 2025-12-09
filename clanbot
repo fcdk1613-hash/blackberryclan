@@ -420,6 +420,86 @@ def get_role_title(code: str | None) -> str:
         return "—"
     return ROLE_TITLES.get(code, code)
 
+# Ветки для "перевода" между техниками и пехотой
+MECH_BRANCH: set[str] = {
+    "mech_nav",
+    "mech_nav_school",
+    "mech_nav_driver_gunner",
+    "mech_nav_squad_leader",
+    "mech_nav_tactics",
+    "crew_cmd_profile",
+    "crew_cmd_instr",
+    "to_infantry",
+    "officer_school",
+    "leadership",
+    "asst_squad_leader",
+    "squad_leader",
+    "asst_faction_leader",
+    "faction_leader",
+}
+
+MEDIC_BRANCH: set[str] = {
+    "medic_tube_root",
+    "medic_tube_school",
+    "medic",
+    "tube",
+    "squad_sergeant_cadet",
+    "squad_instr",
+    "to_tech",
+    "squad_brigadier",
+    "squad_replace_root",
+    "cmd_replace",
+    "cmd_profile",
+    "cmd_instr",
+    "sergeant_school_sl",
+    "medic_tube_from_sl",
+    "squad_profile_sl",
+    "squad_instr_sl",
+    "squad_profile_sl_2",
+    "cmd_replace_sl",
+    "light_specs",
+    "heavy_specs",
+}
+
+# Быстрый индекс роли по общему порядку
+ROLE_INDEX: dict[str, int] = {code: i for i, code in enumerate(ROLE_ORDER)}
+
+def get_best_open_role_in_branch(opened: list[str] | set[str], branch: set[str]) -> Optional[str]:
+    """
+    Возвращает самую "продвинутую" (дальше всех по ROLE_ORDER) открытую роль
+    в заданной ветке, или None, если в ветке ещё ничего не открыто.
+    """
+    opened_set = set(opened)
+    candidates = [code for code in opened_set if code in branch]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda code: ROLE_INDEX.get(code, -1))
+
+async def get_transfer_target(user_id: int, trigger_code: str) -> Optional[str]:
+    """
+    Логика специальных кнопок:
+    - 'to_infantry'  (Перевод в пехоту) -> ближайшая открытая роль в ветке пехоты
+    - 'to_tech'      (Перевод в тех)    -> ближайшая открытая роль в ветке техников
+
+    Если в целевой ветке ещё ничего не открыто — используем корневую роль ветки.
+    """
+    if trigger_code not in {"to_infantry", "to_tech"}:
+        return None
+
+    opened = await get_user_roles(user_id)
+
+    if trigger_code == "to_infantry":
+        # Из мехов в пехоту
+        target = get_best_open_role_in_branch(opened, MEDIC_BRANCH)
+        return target or "medic_tube_root"
+
+    if trigger_code == "to_tech":
+        # Из пехоты в технику
+        target = get_best_open_role_in_branch(opened, MECH_BRANCH)
+        return target or "mech_nav"
+
+    return None
+
 # ======= ELO / RANKS =======
 
 RANKS = [
@@ -3108,6 +3188,11 @@ async def on_role_set(call: CallbackQuery):
     if role_code not in allowed:
         await call.answer("Переход запрещён блок-схемой.", show_alert=True)
         return
+
+    # Специальная логика для "Перевод в пехоту" / "Перевод в тех"
+    transfer_target = await get_transfer_target(target_id, role_code)
+    if transfer_target:
+        role_code = transfer_target
 
     # Устанавливаем роль
     await set_user_current_role(target_id, role_code)
