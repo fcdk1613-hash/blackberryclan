@@ -3330,6 +3330,14 @@ async def on_role_set(call: CallbackQuery):
     await set_user_current_role(target_id, role_code)
     opened = set(await get_user_roles(target_id))
 
+    # Обновляем меню
+    try:
+        updated_user = await get_user(target_id)
+        await call.message.edit_text(
+            format_profile(updated_user, title="Редактирование ролей"),
+            reply_markup=roles_choose_kb(target_id, opened, role_code),
+        )
+
     # Уведомление пользователю
     try:
         await bot.send_message(
