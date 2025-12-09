@@ -291,8 +291,20 @@ ROLE_TITLES: dict[str, str] = {
     "squad_profile_sl_2": "Командир отряда(Профильный) (вариант СЛ 2)",   # новый узел
     "cmd_replace_sl": "ЦМД(Замена)",                                      # отдельный узел
 
-    # Заглушки для будущих веток (пока без продолжения)
+    # Ветка Лёгких специалистов
     "light_specs": "Легкие специалисты",
+    "light_mg": "Лёгкий пулемет",
+    "light_gp": "ГП",
+    "light_marksman": "Марксман",
+    "light_squad_cadet": "Командир отряда(курсант)",
+    "light_squad_profile": "Командир отряда(Профильный)",
+    "light_squad_instr": "Командир отряда Инструктор",
+    "light_multiclass": "Мультикласс",
+    "light_multiclass_instr": "Инструктор",
+    "to_heavy_specs": "Перевод в тяж. спец.",
+    "to_medic_from_light": "Перевод в медик-стрелок-труба",
+
+    # Заглушка для тяжёлых специалистов
     "heavy_specs": "Тяжелые специалисты",
 }
 
@@ -342,6 +354,16 @@ ROLE_ORDER: list[str] = [
     "squad_profile_sl_2",
     "cmd_replace_sl",
     "light_specs",
+    "light_mg",
+    "light_gp",
+    "light_marksman",
+    "light_squad_cadet",
+    "light_squad_profile",
+    "light_squad_instr",
+    "light_multiclass",
+    "light_multiclass_instr",
+    "to_heavy_specs",
+    "to_medic_from_light",
     "heavy_specs",
 ]
 
@@ -404,8 +426,23 @@ ROLE_GRAPH: dict[str, list[str]] = {
     # ЦМД(Замена) -> Перевод в тех (конец), ЦМД Инструктор -> Руководящий состав
     "cmd_replace_sl": ["to_tech", "cmd_instr"],
 
-    # Заглушки на будущее
-    "light_specs": [],
+    # Лёгкие специалисты
+    "light_specs": ["light_mg", "light_gp", "light_marksman", "light_multiclass"],
+    "light_mg": ["light_squad_cadet"],
+    "light_gp": ["light_squad_cadet"],
+    "light_marksman": ["light_squad_cadet"],
+    "light_squad_cadet": ["light_squad_profile"],
+    "light_squad_profile": ["light_squad_instr"],
+    # Командир отряда Инструктор (лёгкие спецы) -> Перевод в тех, ЦМД(замена)
+    "light_squad_instr": ["to_tech", "cmd_replace"],
+    # Мультикласс -> Инструктор мультикласса
+    "light_multiclass": ["light_multiclass_instr"],
+    # Инструктор мультикласса -> переводы в тяж. и в медик-стрелок-труба(школа)
+    "light_multiclass_instr": ["to_heavy_specs", "to_medic_from_light"],
+    "to_heavy_specs": [],          # Перевод в тяж. спец. -> Нет (логика перевода отдельно)
+    "to_medic_from_light": [],     # Перевод в медик-стрелок-труба -> Нет (логика перевода отдельно)
+
+    # Тяжёлые специалисты (пока заглушка)
     "heavy_specs": [],
 }
 
@@ -420,7 +457,7 @@ def get_role_title(code: str | None) -> str:
         return "—"
     return ROLE_TITLES.get(code, code)
 
-# Ветки для "перевода" между техниками и пехотой
+# Ветки для "переводов" между направлениями
 MECH_BRANCH: set[str] = {
     "mech_nav",
     "mech_nav_school",
@@ -438,6 +475,7 @@ MECH_BRANCH: set[str] = {
     "faction_leader",
 }
 
+# Вся ветка Стрелок-медик-труба (включая СЛ и спецов)
 MEDIC_BRANCH: set[str] = {
     "medic_tube_root",
     "medic_tube_school",
@@ -458,6 +496,36 @@ MEDIC_BRANCH: set[str] = {
     "squad_profile_sl_2",
     "cmd_replace_sl",
     "light_specs",
+    "light_mg",
+    "light_gp",
+    "light_marksman",
+    "light_squad_cadet",
+    "light_squad_profile",
+    "light_squad_instr",
+    "light_multiclass",
+    "light_multiclass_instr",
+    "to_heavy_specs",
+    "to_medic_from_light",
+    "heavy_specs",
+}
+
+# Только подветка "стрелок-медик-труба(школа)"
+MEDIC_SCHOOL_BRANCH: set[str] = {
+    "medic_tube_school",
+    "medic",
+    "tube",
+    "squad_sergeant_cadet",
+    "squad_instr",
+    "to_tech",
+    "squad_brigadier",
+    "cmd_replace",
+    "cmd_profile",
+    "cmd_instr",
+    "leadership",
+}
+
+# Ветка тяжёлых специалистов (пока только корень)
+HEAVY_BRANCH: set[str] = {
     "heavy_specs",
 }
 
@@ -477,29 +545,34 @@ def get_best_open_role_in_branch(opened: list[str] | set[str], branch: set[str])
 
 async def get_transfer_target(user_id: int, trigger_code: str) -> Optional[str]:
     """
-    Логика специальных кнопок:
-    - 'to_infantry'  (Перевод в пехоту) -> ближайшая открытая роль в ветке пехоты
-    - 'to_tech'      (Перевод в тех)    -> ближайшая открытая роль в ветке техников
-
-    Если в целевой ветке ещё ничего не открыто — используем корневую роль ветки.
+    Логика специальных кнопок-переводов:
+    - 'to_infantry'          -> ближайшая открытая роль в MEDIC_BRANCH
+    - 'to_tech'              -> ближайшая открытая роль в MECH_BRANCH
+    - 'to_heavy_specs'       -> ближайшая открытая роль в HEAVY_BRANCH
+    - 'to_medic_from_light'  -> ближайшая открытая роль в MEDIC_SCHOOL_BRANCH
     """
-    if trigger_code not in {"to_infantry", "to_tech"}:
+    if trigger_code not in {"to_infantry", "to_tech", "to_heavy_specs", "to_medic_from_light"}:
         return None
 
     opened = await get_user_roles(user_id)
 
     if trigger_code == "to_infantry":
-        # Из мехов в пехоту
         target = get_best_open_role_in_branch(opened, MEDIC_BRANCH)
         return target or "medic_tube_root"
 
     if trigger_code == "to_tech":
-        # Из пехоты в технику
         target = get_best_open_role_in_branch(opened, MECH_BRANCH)
         return target or "mech_nav"
 
-    return None
+    if trigger_code == "to_heavy_specs":
+        target = get_best_open_role_in_branch(opened, HEAVY_BRANCH)
+        return target or "heavy_specs"
 
+    if trigger_code == "to_medic_from_light":
+        target = get_best_open_role_in_branch(opened, MEDIC_SCHOOL_BRANCH)
+        return target or "medic_tube_school"
+
+    return None
 # ======= ELO / RANKS =======
 
 RANKS = [
@@ -3189,7 +3262,19 @@ async def on_role_set(call: CallbackQuery):
         await call.answer("Переход запрещён блок-схемой.", show_alert=True)
         return
 
-    # Специальная логика для "Перевод в пехоту" / "Перевод в тех"
+    # Спецлогика: мультикласс лёгких спецов — только если открыты 3 класса
+    if role_code == "light_multiclass":
+        opened_now = set(await get_user_roles(target_id))
+        required = {"light_mg", "light_gp", "light_marksman"}
+        if not required.issubset(opened_now):
+            await call.answer(
+                "Мультикласс доступен только при открытых ролях:\n"
+                "Лёгкий пулемет, ГП и Марксман.",
+                show_alert=True,
+            )
+            return
+
+    # Спецлогика для кнопок-переводов (пех/тех/тяж/медик-стрелок(школа))
     transfer_target = await get_transfer_target(target_id, role_code)
     if transfer_target:
         role_code = transfer_target
