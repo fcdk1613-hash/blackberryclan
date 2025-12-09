@@ -3337,6 +3337,8 @@ async def on_role_set(call: CallbackQuery):
             format_profile(updated_user, title="Редактирование ролей"),
             reply_markup=roles_choose_kb(target_id, opened, role_code),
         )
+    except Exception:
+        pass
 
     # Уведомление пользователю
     try:
@@ -3344,7 +3346,7 @@ async def on_role_set(call: CallbackQuery):
             target_id,
             f"🎖 Ваша роль изменена: <b>{get_role_title(role_code)}</b>",
         )
-    except:
+    except Exception:
         pass
 
     await call.answer("Роль обновлена.")
