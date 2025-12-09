@@ -285,9 +285,11 @@ ROLE_TITLES: dict[str, str] = {
 
     # Ветка Сержантская школа (СЛ)
     "sergeant_school_sl": "Сержантская школа(СЛ)",
-    "medic_tube_from_sl": "Стрелок-медик-труба",        # отдельный узел
-    "squad_profile_sl": "Командир отряда(профильный)",  # отдельный узел
-    "cmd_replace_sl": "ЦМД(Замена)",                    # отдельный узел
+    "medic_tube_from_sl": "Стрелок-медик-труба (вариант СЛ)",             # отдельный узел
+    "squad_profile_sl": "Командир отряда(профильный) (вариант СЛ)",       # отдельный узел
+    "squad_instr_sl": "Командир отряда Инструктор (вариант СЛ)",          # новый узел
+    "squad_profile_sl_2": "Командир отряда(Профильный) (вариант СЛ 2)",   # новый узел
+    "cmd_replace_sl": "ЦМД(Замена)",                                      # отдельный узел
 
     # Заглушки для будущих веток (пока без продолжения)
     "light_specs": "Легкие специалисты",
@@ -329,6 +331,18 @@ ROLE_ORDER: list[str] = [
     "cmd_replace_sl",
     "light_specs",
     "heavy_specs",
+    "squad_replace_root",
+    "cmd_replace",
+    "cmd_profile",
+    "cmd_instr",
+    "sergeant_school_sl",
+    "medic_tube_from_sl",
+    "squad_profile_sl",
+    "squad_instr_sl",
+    "squad_profile_sl_2",
+    "cmd_replace_sl",
+    "light_specs",
+    "heavy_specs",
 ]
 
 # ГРАФ РОЛЕЙ ПО ТЕКУЩЕЙ БЛОК-СХЕМЕ (ТОЛЬКО ТО, ЧТО МЫ УЖЕ РАСПИСАЛИ)
@@ -365,20 +379,30 @@ ROLE_GRAPH: dict[str, list[str]] = {
     "medic_tube_school": ["medic", "tube"],
     "medic": ["squad_sergeant_cadet"],
     "tube": ["squad_sergeant_cadet"],
+    # Стрелок-медик, Труба -> Командир отряда Сержант (Курсант)
     "squad_sergeant_cadet": ["squad_instr", "cmd_replace"],
+    # Командир отряда (Инструктор) -> Перевод в тех (конец), Командир отряда (Бригадир) (конец)
     "squad_instr": ["to_tech", "squad_brigadier"],
-    "to_tech": [],
-    "squad_brigadier": [],
-    "squad_replace_root": [],  # "Командир отряда(Замена)" под рекрутом как конечный
+    "to_tech": [],              # Перевод в тех -> Нет
+    "squad_brigadier": [],      # Командир отряда(Бригадир) -> Нет
+    "squad_replace_root": [],   # "Командир отряда(Замена)" под рекрутом как конечный
+    # ЦМД (Замена) -> ЦМД (Профильный) -> ЦМД Инструктор -> Руководящий состав
     "cmd_replace": ["cmd_profile"],
     "cmd_profile": ["cmd_instr"],
-    "cmd_instr": [],
+    "cmd_instr": ["leadership"],
 
     # Сержантская школа (СЛ)
     "sergeant_school_sl": ["medic_tube_from_sl", "squad_profile_sl"],
-    "medic_tube_from_sl": ["squad_profile_sl"],
-    "squad_profile_sl": ["cmd_replace_sl"],
-    "cmd_replace_sl": [],
+    # Стрелок-медик-труба (вариант СЛ) -> Командир отряда(Профильный) (вариант СЛ 2)
+    "medic_tube_from_sl": ["squad_profile_sl_2"],
+    # Командир отряда(профильный) (вариант СЛ) -> Командир отряда Инструктор (вариант СЛ)
+    "squad_profile_sl": ["squad_instr_sl"],
+    # Командир отряда Инструктор (вариант СЛ) -> ЦМД(Замена)
+    "squad_instr_sl": ["cmd_replace_sl"],
+    # Командир отряда(Профильный) (вариант СЛ 2) -> ЦМД(Замена)
+    "squad_profile_sl_2": ["cmd_replace_sl"],
+    # ЦМД(Замена) -> Перевод в тех (конец), ЦМД Инструктор -> Руководящий состав
+    "cmd_replace_sl": ["to_tech", "cmd_instr"],
 
     # Заглушки на будущее
     "light_specs": [],
