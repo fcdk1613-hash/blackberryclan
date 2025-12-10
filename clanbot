@@ -623,6 +623,9 @@ def generate_role_tree_image(
     import time
     from PIL import Image, ImageDraw, ImageFont
 
+    # Роли, которые НЕ нужно показывать на картинке
+    HIDDEN_TREE_ROLES = {"squad_instr_sl", "squad_profile_sl_2"}
+
     opened_set: set[str] = set(opened_roles or [])
 
     # --- строим уровни дерева по ROLE_GRAPH ---
@@ -640,8 +643,11 @@ def generate_role_tree_image(
                     q.append(child)
 
     # Подхватываем роли, которые есть в ROLE_TITLES, но не попали в BFS
+    # (кроме тех, которые не нужно показывать вообще)
     max_depth = max(depths.values()) if depths else 0
     for code in ROLE_TITLES.keys():
+        if code in HIDDEN_TREE_ROLES:
+            continue
         if code not in depths:
             max_depth += 1
             depths[code] = max_depth
@@ -664,7 +670,7 @@ def generate_role_tree_image(
         levels[0] = ["recruit"]
 
     # --- геометрия картинки ---
-    block_w, block_h = 260, 70
+    block_w, block_h = 260, 110  # блок стал выше
     h_spacing = 40
     v_spacing = 120
     margin_x, margin_top, margin_bottom = 60, 120, 80
@@ -683,6 +689,32 @@ def generate_role_tree_image(
         node_font = ImageFont.truetype("DejaVuSans.ttf", 20)
     except Exception:
         title_font = node_font = ImageFont.load_default()
+
+    def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+        """
+        Разбивает текст на несколько строк так, чтобы каждая помещалась в max_width.
+        """
+        words = text.split()
+        if not words:
+            return [""]
+
+        lines: list[str] = []
+        current = ""
+
+        for w in words:
+            test = (current + " " + w).strip()
+            bbox = draw.textbbox((0, 0), test, font=font)
+            width = bbox[2] - bbox[0]
+            if width <= max_width or not current:
+                current = test
+            else:
+                lines.append(current)
+                current = w
+
+        if current:
+            lines.append(current)
+
+        return lines
 
     # --- заголовок ---
     header = "Дерево ролей"
@@ -743,12 +775,27 @@ def generate_role_tree_image(
             draw.rectangle((x1, y1, x2, y2), fill=fill, outline=outline, width=3)
 
         title = get_role_title(code)
-        tb = draw.textbbox((0, 0), title, font=node_font)
-        tw = tb[2] - tb[0]
-        th = tb[3] - tb[1]
-        tx = x1 + (block_w - tw) // 2
-        ty = y1 + (block_h - th) // 2
-        draw.text((tx, ty), title, font=node_font, fill=(250, 250, 250, 255))
+
+        # переносим текст по строкам, если он не влезает по ширине
+        lines = wrap_text(title, node_font, block_w - 20)
+
+        # высота одной строки
+        if lines:
+            lb = draw.textbbox((0, 0), lines[0], font=node_font)
+            line_h = lb[3] - lb[1]
+        else:
+            line_h = 0
+
+        line_spacing = 4
+        total_h = len(lines) * line_h + max(0, (len(lines) - 1) * line_spacing)
+        start_y = y1 + (block_h - total_h) // 2
+
+        for i, line in enumerate(lines):
+            lb = draw.textbbox((0, 0), line, font=node_font)
+            lw = lb[2] - lb[0]
+            tx = x1 + (block_w - lw) // 2
+            ty = start_y + i * (line_h + line_spacing)
+            draw.text((tx, ty), line, font=node_font, fill=(250, 250, 250, 255))
 
     # Легенда внизу
     legend_y = img_h - margin_bottom + 10
