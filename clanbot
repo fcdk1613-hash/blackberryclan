@@ -608,201 +608,6 @@ async def get_transfer_target(user_id: int, trigger_code: str) -> Optional[str]:
         return target or "medic_tube_school"
 
     return None
-# ======= Career map image =======
-
-def _build_role_layout():
-    """
-    Строим простую «сетку» для всех ролей на основе ROLE_GRAPH:
-    по оси X — глубина от рекрута, по оси Y — порядок ролей на уровне.
-    """
-    from collections import deque, defaultdict
-
-    # Собираем все ноды
-    all_nodes: set[str] = set(ROLE_GRAPH.keys())
-    for children in ROLE_GRAPH.values():
-        all_nodes.update(children)
-
-    depth: dict[str, int] = {}
-    queue: deque[str] = deque()
-
-    # Стартуем от рекрута, если есть
-    if "recruit" in all_nodes:
-        depth["recruit"] = 0
-        queue.append("recruit")
-
-    while queue:
-        parent = queue.popleft()
-        for child in ROLE_GRAPH.get(parent, []):
-            if child not in depth:
-                depth[child] = depth[parent] + 1
-                queue.append(child)
-
-    # Если есть ноды, не достижимые от рекрута — ставим их в «последний» уровень
-    if depth:
-        max_depth = max(depth.values())
-    else:
-        max_depth = 0
-    for code in all_nodes:
-        if code not in depth:
-            max_depth += 1
-            depth[code] = max_depth
-
-    # Группируем по глубине
-    from collections import defaultdict
-    levels: dict[int, list[str]] = defaultdict(list)
-    for code, d in depth.items():
-        levels[d].append(code)
-
-    # Сортируем роли на уровне по ROLE_ORDER (если есть), затем по коду
-    def order_key(code: str) -> tuple[int, str]:
-        try:
-            idx = ROLE_ORDER.index(code)
-        except ValueError:
-            idx = len(ROLE_ORDER)
-        return (idx, code)
-
-    sorted_levels = sorted(levels.items(), key=lambda x: x[0])
-
-    # Считаем размеры картинки
-    margin_x = 120
-    margin_y = 160   # оставим место под заголовок
-    x_step = 360
-    y_step = 150
-
-    cols = len(sorted_levels)
-    rows = max(len(codes) for _, codes in sorted_levels) if sorted_levels else 1
-
-    width = margin_x * 2 + max(1, cols - 1) * x_step
-    height = margin_y * 2 + max(1, rows - 1) * y_step
-
-    # Координаты центров блоков
-    layout: dict[str, tuple[int, int]] = {}
-    for col_idx, (d, codes) in enumerate(sorted_levels):
-        codes.sort(key=order_key)
-        for row_idx, code in enumerate(codes):
-            cx = margin_x + col_idx * x_step
-            cy = margin_y + row_idx * y_step
-            layout[code] = (cx, cy)
-
-    return layout, (width, height)
-
-
-def generate_career_card_image(user: dict, opened_roles: list[str]) -> str:
-    """
-    Строим большую картинку-блок-схему дерева ролей.
-    Зеленым подсвечиваем все роли из opened_roles.
-    """
-    opened_set = set(opened_roles or [])
-
-    layout, (width, height) = _build_role_layout()
-
-    bg_color = (10, 5, 25)
-    box_w, box_h = 260, 80
-    box_color_closed = (60, 60, 80)
-    box_color_open = (46, 139, 87)
-    box_outline = (220, 220, 220)
-    line_color = (140, 140, 160)
-
-    img = Image.new("RGB", (width, height), bg_color)
-    draw = ImageDraw.Draw(img)
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    icons_dir = os.path.join(base_dir, "icons")
-
-    # Шрифты
-    try:
-        font_path = os.path.join(icons_dir, "ofont.ru_Futura Round.ttf")
-        title_font = ImageFont.truetype(font_path, 42)
-        node_font = ImageFont.truetype(font_path, 24)
-        legend_font = ImageFont.truetype(font_path, 22)
-    except Exception:
-        title_font = ImageFont.load_default()
-        node_font = ImageFont.load_default()
-        legend_font = ImageFont.load_default()
-
-    # Заголовок и легенда
-    nickname = user.get("nickname") or ""
-    title_text = f"Карьера игрока {nickname}".strip()
-    title_w, title_h = draw.textsize(title_text, font=title_font)
-    draw.text(((width - title_w) // 2, 20), title_text, font=title_font, fill=(255, 255, 255))
-
-    legend_text = "Зелёным отмечены уже открытые роли"
-    legend_w, legend_h = draw.textsize(legend_text, font=legend_font)
-    draw.text(((width - legend_w) // 2, 20 + title_h + 10), legend_text, font=legend_font, fill=(200, 200, 200))
-
-    # Линии между блоками
-    for parent, children in ROLE_GRAPH.items():
-        if parent not in layout:
-            continue
-        px, py = layout[parent]
-        for child in children:
-            if child not in layout:
-                continue
-            cx, cy = layout[child]
-            draw.line(
-                (px, py + box_h // 2, cx, cy - box_h // 2),
-                fill=line_color,
-                width=3,
-            )
-
-    # Небольший helper для переноса текста
-    def wrap_text(text: str, font, max_width: int) -> list[str]:
-        words = text.split()
-        if not words:
-            return [""]
-        lines: list[str] = []
-        current = words[0]
-        for word in words[1:]:
-            test = current + " " + word
-            w, _ = draw.textsize(test, font=font)
-            if w <= max_width:
-                current = test
-            else:
-                lines.append(current)
-                current = word
-        lines.append(current)
-        return lines
-
-    # Блоки ролей
-    for code, (cx, cy) in layout.items():
-        title = ROLE_TITLES.get(code, code)
-        left = cx - box_w // 2
-        top = cy - box_h // 2
-        right = cx + box_w // 2
-        bottom = cy + box_h // 2
-
-        fill_color = box_color_open if code in opened_set else box_color_closed
-
-        draw.rounded_rectangle(
-            (left, top, right, bottom),
-            radius=14,
-            fill=fill_color,
-            outline=box_outline,
-            width=2,
-        )
-
-        lines = wrap_text(title, node_font, box_w - 20)
-        total_h = 0
-        for line in lines:
-            _, h = draw.textsize(line, font=node_font)
-            total_h += h
-        total_h += (len(lines) - 1) * 4
-
-        ty = cy - total_h // 2
-        for line in lines:
-            tw, th = draw.textsize(line, font=node_font)
-            draw.text((cx - tw // 2, ty), line, font=node_font, fill=(255, 255, 255))
-            ty += th + 4
-
-    # Сохраняем в отдельную папку
-    out_dir = os.path.join(base_dir, "career_maps")
-    os.makedirs(out_dir, exist_ok=True)
-    from datetime import datetime
-    filename = f"career_{user.get('user_id')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-    out_path = os.path.join(out_dir, filename)
-    img.save(out_path, format="PNG")
-    return out_path
-
 # ======= ELO / RANKS =======
 
 RANKS = [
@@ -1315,7 +1120,6 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
     kb.button(text="🗑 Удалить игрока", callback_data=f"remove:init:{user_id}")
     kb.row()
     kb.button(text="✏️ Редактировать", callback_data=f"edit:init:{user_id}")
-    kb.button(text="🧬 Карьера игрока", callback_data=f"career:view:{target_id}")
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     kb.row()
     kb.button(text="➕ Добавить запись в историю", callback_data=f"hist:add:{user_id}")
@@ -3285,42 +3089,6 @@ async def on_profile_refresh(call: CallbackQuery):
         pass
     await call.answer("Профиль обновлён.")
 
-async def _send_career_for_user(call: CallbackQuery, target_id: int, title_prefix: str):
-    user = await get_user(target_id)
-    if not user:
-        await call.answer("Пользователь не найден.", show_alert=True)
-        return
-
-    roles = await get_user_roles(target_id)
-    image_path = generate_career_card_image(user, opened_roles=roles or [])
-    caption = f"{title_prefix}\n\nЗелёным отмечены уже открытые роли."
-
-    await call.message.answer_photo(
-        photo=FSInputFile(image_path),
-        caption=caption,
-    )
-
-@dp.callback_query(F.data.startswith("career:view:"))
-async def on_career_view(call: CallbackQuery):
-    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
-        await call.answer("Недостаточно прав.", show_alert=True)
-        return
-
-    try:
-        _, _, uid_str = call.data.split(":")
-        target_id = int(uid_str)
-    except Exception:
-        await call.answer("Некорректные данные.", show_alert=True)
-        return
-
-    await _send_career_for_user(call, target_id, "Карьера игрока")
-    await call.answer()
-
-@dp.callback_query(F.data == "career:self")
-async def on_career_self(call: CallbackQuery):
-    await _send_career_for_user(call, call.from_user.id, "Ваша карьерная карта")
-    await call.answer()
-
 @dp.callback_query(F.data.startswith("profile_choosefac:"))
 async def on_profile_choose_faction(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -3942,7 +3710,6 @@ async def cmd_profile(message: Message):
     photo = FSInputFile(image_path)
     kb = InlineKeyboardBuilder()
     kb.button(text="📈 История изменений", callback_data="elo_history")
-    kb.button(text="🧬 Моя карьера", callback_data="career:self")
     await message.answer_photo(
         photo=photo,
         caption="\n".join(caption_lines),
