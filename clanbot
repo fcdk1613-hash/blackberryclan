@@ -1315,7 +1315,6 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
         kb.row()
         kb.button(text="❌ Удалить из клана", callback_data=f"profile_remove:{user_id}")
     return kb.adjust(1).as_markup()
-        pass  # visibility already allowed
     if actor_id in ADMIN_IDS:
         kb.button(text="⚖Изменить рейтинг", callback_data=f"elo:edit:{user_id}")
         kb.button(text="🧹 Очистить историю игрока", callback_data=f"hist:clear:{user_id}")
