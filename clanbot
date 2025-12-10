@@ -608,6 +608,192 @@ async def get_transfer_target(user_id: int, trigger_code: str) -> Optional[str]:
         return target or "medic_tube_school"
 
     return None
+
+def generate_role_tree_image(
+    user_id: int,
+    opened_roles: set[str] | list[str] | None,
+    current_role: str | None = None,
+) -> str:
+    """
+    Генерирует большую PNG-картинку дерева ролей.
+    Зелёным подсвечиваются уже открытые блоки из opened_roles.
+    """
+    from collections import deque
+    import os
+    import time
+    from PIL import Image, ImageDraw, ImageFont
+
+    opened_set: set[str] = set(opened_roles or [])
+
+    # --- строим уровни дерева по ROLE_GRAPH ---
+    depths: dict[str, int] = {}
+    root = "recruit"
+    if root in ROLE_GRAPH:
+        q = deque([root])
+        depths[root] = 0
+        while q:
+            v = q.popleft()
+            d = depths[v]
+            for child in ROLE_GRAPH.get(v, []):
+                if child not in depths:
+                    depths[child] = d + 1
+                    q.append(child)
+
+    # Подхватываем роли, которые есть в ROLE_TITLES, но не попали в BFS
+    max_depth = max(depths.values()) if depths else 0
+    for code in ROLE_TITLES.keys():
+        if code not in depths:
+            max_depth += 1
+            depths[code] = max_depth
+
+    # Группируем по уровням
+    levels: dict[int, list[str]] = {}
+    for code, d in depths.items():
+        levels.setdefault(d, []).append(code)
+
+    def role_sort_key(code: str) -> int:
+        return ROLE_INDEX.get(code, 9999)
+
+    for d in levels:
+        levels[d].sort(key=role_sort_key)
+
+    ordered_depths = sorted(levels.keys())
+    if not ordered_depths:
+        # На всякий случай, чтобы не упасть
+        ordered_depths = [0]
+        levels[0] = ["recruit"]
+
+    # --- геометрия картинки ---
+    block_w, block_h = 260, 70
+    h_spacing = 40
+    v_spacing = 120
+    margin_x, margin_top, margin_bottom = 60, 120, 80
+
+    max_per_level = max(len(levels[d]) for d in ordered_depths)
+    img_w = margin_x * 2 + max_per_level * block_w + (max_per_level - 1) * h_spacing
+    levels_count = len(ordered_depths)
+    img_h = margin_top + margin_bottom + levels_count * block_h + (levels_count - 1) * v_spacing
+
+    img = Image.new("RGBA", (img_w, img_h), (10, 10, 20, 255))
+    draw = ImageDraw.Draw(img)
+
+    # --- шрифты ---
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+        node_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+    except Exception:
+        title_font = node_font = ImageFont.load_default()
+
+    # --- заголовок ---
+    header = "Дерево ролей"
+    if current_role:
+        header += f" (текущая: {get_role_title(current_role)})"
+    hb = draw.textbbox((0, 0), header, font=title_font)
+    hw = hb[2] - hb[0]
+    draw.text(((img_w - hw) // 2, 30), header, font=title_font, fill=(240, 240, 240))
+
+    # --- координаты блоков ---
+    positions: dict[str, tuple[int, int, int, int]] = {}
+    for level_index, depth in enumerate(ordered_depths):
+        roles_at_level = levels[depth]
+        count = len(roles_at_level)
+        total_width = count * block_w + (count - 1) * h_spacing
+        start_x = (img_w - total_width) // 2
+        y1 = margin_top + level_index * (block_h + v_spacing)
+
+        for i, code in enumerate(roles_at_level):
+            x1 = start_x + i * (block_w + h_spacing)
+            x2 = x1 + block_w
+            y2 = y1 + block_h
+            positions[code] = (x1, y1, x2, y2)
+
+    # --- связи между блоками ---
+    line_color = (90, 90, 140, 255)
+    for parent, children in ROLE_GRAPH.items():
+        if parent not in positions:
+            continue
+        px1, py1, px2, py2 = positions[parent]
+        pcx = (px1 + px2) // 2
+        pcy = py2
+        for child in children:
+            if child not in positions:
+                continue
+            cx1, cy1, cx2, cy2 = positions[child]
+            ccx = (cx1 + cx2) // 2
+            ccy = cy1
+            draw.line((pcx, pcy, ccx, ccy), fill=line_color, width=3)
+
+    # --- сами блоки ---
+    for code, (x1, y1, x2, y2) in positions.items():
+        is_open = code in opened_set
+        is_current = current_role == code
+
+        fill = (30, 130, 70, 255) if is_open else (35, 35, 70, 255)
+        outline = (240, 240, 240, 255) if is_current else (130, 130, 170, 255)
+
+        try:
+            draw.rounded_rectangle(
+                (x1, y1, x2, y2),
+                radius=18,
+                fill=fill,
+                outline=outline,
+                width=3,
+            )
+        except Exception:
+            draw.rectangle((x1, y1, x2, y2), fill=fill, outline=outline, width=3)
+
+        title = get_role_title(code)
+        tb = draw.textbbox((0, 0), title, font=node_font)
+        tw = tb[2] - tb[0]
+        th = tb[3] - tb[1]
+        tx = x1 + (block_w - tw) // 2
+        ty = y1 + (block_h - th) // 2
+        draw.text((tx, ty), title, font=node_font, fill=(250, 250, 250, 255))
+
+    # Легенда внизу
+    legend_y = img_h - margin_bottom + 10
+    legend_x = margin_x
+
+    box_w, box_h = 36, 20
+
+    # открытые
+    draw.rectangle(
+        (legend_x, legend_y, legend_x + box_w, legend_y + box_h),
+        fill=(30, 130, 70, 255),
+    )
+    txt = "— открытые блоки"
+    tb = draw.textbbox((0, 0), txt, font=node_font)
+    draw.text(
+        (legend_x + box_w + 10, legend_y - 2),
+        txt,
+        font=node_font,
+        fill=(230, 230, 230, 255),
+    )
+
+    # закрытые
+    legend_x2 = legend_x + 280
+    draw.rectangle(
+        (legend_x2, legend_y, legend_x2 + box_w, legend_y + box_h),
+        fill=(35, 35, 70, 255),
+    )
+    txt2 = "— ещё не открыты"
+    draw.text(
+        (legend_x2 + box_w + 10, legend_y - 2),
+        txt2,
+        font=node_font,
+        fill=(230, 230, 230, 255),
+    )
+
+    # --- сохраняем ---
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(base_dir, "role_trees")
+    os.makedirs(out_dir, exist_ok=True)
+
+    filename = f"career_{user_id}_{int(time.time())}.png"
+    full_path = os.path.join(out_dir, filename)
+    img.save(full_path, "PNG")
+
+    return full_path
 # ======= ELO / RANKS =======
 
 RANKS = [
@@ -1122,8 +1308,13 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
     kb.button(text="✏️ Редактировать", callback_data=f"edit:init:{user_id}")
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     kb.row()
-    kb.button(text="➕ Добавить запись в историю", callback_data=f"hist:add:{user_id}")
+    kb.button(text="➕ Добавить запись в историю Elo", callback_data=f"elo:panel:{user_id}")
     if actor_id in (ADMIN_IDS | MODERATOR_IDS):
+        kb.button(text="🌳 Карьера игрока", callback_data=f"career:user:{user_id}")
+    if actor_id in ADMIN_IDS:
+        kb.row()
+        kb.button(text="❌ Удалить из клана", callback_data=f"profile_remove:{user_id}")
+    return kb.adjust(1).as_markup()
         pass  # visibility already allowed
     if actor_id in ADMIN_IDS:
         kb.button(text="⚖Изменить рейтинг", callback_data=f"elo:edit:{user_id}")
@@ -3072,6 +3263,43 @@ async def cmd_player(message: Message, command: Command):
         reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
     )
 
+@dp.callback_query(F.data.startswith("career:user:"))
+async def on_career_user(call: CallbackQuery):
+    """
+    Показывает дерево ролей выбранного игрока для модераторов/админов.
+    Кнопка «Карьера игрока» в админской карточке.
+    """
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    try:
+        _, _, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    opened = set(await get_user_roles(target_id))
+    current_role = user.get("current_role")
+    image_path = generate_role_tree_image(
+        user_id=target_id,
+        opened_roles=opened,
+        current_role=current_role,
+    )
+
+    caption = f"🌳 Карьера игрока {display_name(user)}.\nЗелёным выделены уже открытые блоки."
+    await call.message.answer_photo(
+        photo=FSInputFile(image_path),
+        caption=caption,
+    )
+    await call.answer()
+
 @dp.callback_query(F.data.startswith("profile_refresh:"))
 async def on_profile_refresh(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -3710,6 +3938,7 @@ async def cmd_profile(message: Message):
     photo = FSInputFile(image_path)
     kb = InlineKeyboardBuilder()
     kb.button(text="📈 История изменений", callback_data="elo_history")
+    kb.button(text="🌳 Моя карьера", callback_data="career:self")
     await message.answer_photo(
         photo=photo,
         caption="\n".join(caption_lines),
@@ -3737,6 +3966,33 @@ async def on_elo_history(call: CallbackQuery):
         nickname=user.get("nickname"),
         points=points,
     )
+
+@dp.callback_query(F.data == "career:self")
+async def on_career_self(call: CallbackQuery):
+    """
+    Показывает дерево ролей текущего игрока.
+    Вызывается из /profile по кнопке «Моя карьера».
+    """
+    user = await get_user(call.from_user.id)
+    if not user:
+        await call.answer("Профиль не найден. Нажмите /start", show_alert=True)
+        return
+
+    user_id = int(user.get("user_id") or call.from_user.id)
+    opened = set(await get_user_roles(user_id))
+    current_role = user.get("current_role")
+
+    image_path = generate_role_tree_image(
+        user_id=user_id,
+        opened_roles=opened,
+        current_role=current_role,
+    )
+
+    await call.message.answer_photo(
+        photo=FSInputFile(image_path),
+        caption="🌳 Ваша карьера в клане.\nЗелёным выделены уже открытые блоки.",
+    )
+    await call.answer()
 
     lines: list[str] = ["<b>📈 История изменения Elo за 7 дней</b>"]
 
