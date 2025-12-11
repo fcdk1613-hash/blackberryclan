@@ -4899,62 +4899,62 @@ async def cmd_train_stats(message: Message):
         return
 
     # SINGLE-DAY: show detailed stats incl. 'Не ответили' and CSV
-    if not date_to:
-        date_str = date_from
-        async with aiosqlite.connect(DB_PATH) as db:
-            # aggregate yes/no/late (только не-Резерв)
-            cur = await db.execute(
-                """
-                SELECT t.response, COUNT(*)
-                FROM training_attendance t
-                JOIN users u ON u.user_id = t.user_id
-                WHERE t.date = ?
-                  AND (u.faction IS NULL OR u.faction != 'Резерв')
-                GROUP BY t.response
-                """,
-                (date_str,),
-            )
-            agg = {row[0]: row[1] for row in await cur.fetchall()}
+if not date_to:
+    date_str = date_from
+    async with aiosqlite.connect(DB_PATH) as db:
+        # aggregate yes/no/late (только не-Резерв)
+        cur = await db.execute(
+            """
+            SELECT t.response, COUNT(*)
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ?
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+            GROUP BY t.response
+            """,
+            (date_str,),
+        )
+        agg = {row[0]: row[1] for row in await cur.fetchall()}
 
-            # details for no/late (только не-Резерв)
-            cur = await db.execute(
-                """
-                SELECT t.user_id, t.response, t.reason
-                FROM training_attendance t
-                JOIN users u ON u.user_id = t.user_id
-                WHERE t.date = ?
-                  AND t.response IN ('no','late')
-                  AND (u.faction IS NULL OR u.faction != 'Резерв')
-                """,
-                (date_str,),
-            )
-            details = await cur.fetchall()
+        # details for no/late (только не-Резерв)
+        cur = await db.execute(
+            """
+            SELECT t.user_id, t.response, t.reason
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ?
+              AND t.response IN ('no','late')
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+            """,
+            (date_str,),
+        )
+        details = await cur.fetchall()
 
-            # joined users (только не-Резерв)
-            cur = await db.execute(
-                """
-                SELECT user_id, nickname, tg_link
-                FROM users
-                WHERE status = ?
-                  AND (faction IS NULL OR faction != 'Резерв')
-                """,
-                ("joined",),
-            )
-            joined_users = await cur.fetchall()
-            all_joined_ids = {u[0] for u in joined_users}
+        # joined users (только не-Резерв)
+        cur = await db.execute(
+            """
+            SELECT user_id, nickname, tg_link, current_role
+            FROM users
+            WHERE status = ?
+              AND (faction IS NULL OR faction != 'Резерв')
+            """,
+            ("joined",),
+        )
+        joined_users = await cur.fetchall()
+        all_joined_ids = {u[0] for u in joined_users}
 
-            # answered set (только не-Резерв, для согласованности)
-            cur = await db.execute(
-                """
-                SELECT DISTINCT t.user_id
-                FROM training_attendance t
-                JOIN users u ON u.user_id = t.user_id
-                WHERE t.date = ?
-                  AND (u.faction IS NULL OR u.faction != 'Резерв')
-                """,
-                (date_str,),
-            )
-            answered_ids = {r[0] for r in await cur.fetchall()}
+        # answered set (только не-Резерв, для согласованности)
+        cur = await db.execute(
+            """
+            SELECT DISTINCT t.user_id
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ?
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+            """,
+            (date_str,),
+        )
+        answered_ids = {r[0] for r in await cur.fetchall()}
 
         # список "Да" для ЦМД и Командиров отряда
         cur = await db.execute(
@@ -4984,7 +4984,7 @@ async def cmd_train_stats(message: Message):
         not_answered = [(uid, nick, link) for uid, nick, link, _role in joined_users if uid not in answered_ids]
         total_joined = len(all_joined_ids)
         not_answered_count = len(not_answered)
-
+    
         text_lines = [
             f"<b>Статистика ответов за {date_str}</b>",
             f"✅ Да: {agg.get('yes', 0)}",
@@ -4992,27 +4992,31 @@ async def cmd_train_stats(message: Message):
             f"⏰ Опоздаю: {agg.get('late', 0)}",
             f"⁉️ Не ответили: {not_answered_count} из {total_joined}",
         ]
-
+    
         # Списки "Да" для ЦМД и Командиров отряда
         def _format_user(nick: str | None, link: str | None, uid: int) -> str:
             uname = username_from_tglink(link)
             if nick:
                 return f"{nick} ({uname})" if uname and uname != "—" else nick
             return uname if uname and uname != "—" else str(uid)
-
+    
         if cmd_yes:
             text_lines.append("")
             text_lines.append('<b>ЦМД — ответили "Да"</b>')
             for uid, nick, link in cmd_yes:
                 text_lines.append(f"• {_format_user(nick, link, uid)}")
-
+    
         if squad_yes:
             text_lines.append("")
             text_lines.append('<b>Командиры отряда — ответили "Да"</b>')
             for uid, nick, link in squad_yes:
                 text_lines.append(f"• {_format_user(nick, link, uid)}")
-
-    async with aiosqlite.connect(DB_PATH) as db:
+    
+        # append reasons list (grouped)
+        if details:
+            text_lines.append("")
+            text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
+        async with aiosqlite.connect(DB_PATH) as db:
         # append reasons list (grouped)
         if details:
             text_lines.append("")
