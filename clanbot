@@ -318,6 +318,10 @@ ROLE_TITLES: dict[str, str] = {
     "heavy_multiclass_instr": "Инструктор тяжёлых специалистов",
 }
 
+# Наборы кодов ролей для ЦМД и Командиров отряда (используются в статистике посещаемости)
+CMD_ROLE_CODES: set[str] = {code for code, title in ROLE_TITLES.items() if "ЦМД" in title}
+SQUAD_LEADER_ROLE_CODES: set[str] = {code for code, title in ROLE_TITLES.items() if "Командир отряда" in title}
+
 # Порядок вывода (используем в общем списке, если надо)
 ROLE_ORDER: list[str] = [
     "recruit",
@@ -4952,7 +4956,32 @@ async def cmd_train_stats(message: Message):
             )
             answered_ids = {r[0] for r in await cur.fetchall()}
 
-        not_answered = [(uid, nick, link) for uid, nick, link in joined_users if uid not in answered_ids]
+        # список "Да" для ЦМД и Командиров отряда
+        cur = await db.execute(
+            """
+            SELECT u.user_id, u.nickname, u.tg_link, u.current_role
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ?
+              AND t.response = 'yes'
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+            """,
+            (date_str,),
+        )
+        yes_rows = await cur.fetchall()
+
+        cmd_yes: list[tuple[int, str | None, str | None]] = []
+        squad_yes: list[tuple[int, str | None, str | None]] = []
+
+        for uid, nick, link, role_code in yes_rows:
+            if not role_code:
+                continue
+            if role_code in CMD_ROLE_CODES:
+                cmd_yes.append((uid, nick, link))
+            if role_code in SQUAD_LEADER_ROLE_CODES:
+                squad_yes.append((uid, nick, link))
+
+        not_answered = [(uid, nick, link) for uid, nick, link, _role in joined_users if uid not in answered_ids]
         total_joined = len(all_joined_ids)
         not_answered_count = len(not_answered)
 
@@ -4964,11 +4993,30 @@ async def cmd_train_stats(message: Message):
             f"⁉️ Не ответили: {not_answered_count} из {total_joined}",
         ]
 
+        # Списки "Да" для ЦМД и Командиров отряда
+        def _format_user(nick: str | None, link: str | None, uid: int) -> str:
+            uname = username_from_tglink(link)
+            if nick:
+                return f"{nick} ({uname})" if uname and uname != "—" else nick
+            return uname if uname and uname != "—" else str(uid)
+
+        if cmd_yes:
+            text_lines.append("")
+            text_lines.append('<b>ЦМД — ответили "Да"</b>')
+            for uid, nick, link in cmd_yes:
+                text_lines.append(f"• {_format_user(nick, link, uid)}")
+
+        if squad_yes:
+            text_lines.append("")
+            text_lines.append('<b>Командиры отряда — ответили "Да"</b>')
+            for uid, nick, link in squad_yes:
+                text_lines.append(f"• {_format_user(nick, link, uid)}")
+
+    async with aiosqlite.connect(DB_PATH) as db:
         # append reasons list (grouped)
         if details:
             text_lines.append("")
             text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
-    async with aiosqlite.connect(DB_PATH) as db:
         for uid, resp, reason in details:
             label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
             reason = reason or "—"
@@ -4981,7 +5029,6 @@ async def cmd_train_stats(message: Message):
                 uname = username_from_tglink(row[1]) if row else None
                 disp = uname if uname and uname != "—" else str(uid)
             text_lines.append(f"{label}: {disp}: {reason}")
-
 
         # Разбиваем длинное сообщение на части, чтобы избежать "Bad Request: message is too long"
         _full_text = "\n".join(text_lines)
