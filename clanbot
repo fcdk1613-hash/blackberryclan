@@ -318,10 +318,6 @@ ROLE_TITLES: dict[str, str] = {
     "heavy_multiclass_instr": "Инструктор тяжёлых специалистов",
 }
 
-# Наборы кодов ролей для ЦМД и Командиров отряда (используются в статистике посещаемости)
-CMD_ROLE_CODES: set[str] = {code for code, title in ROLE_TITLES.items() if "ЦМД" in title}
-SQUAD_LEADER_ROLE_CODES: set[str] = {code for code, title in ROLE_TITLES.items() if "Командир отряда" in title}
-
 # Порядок вывода (используем в общем списке, если надо)
 ROLE_ORDER: list[str] = [
     "recruit",
@@ -3883,13 +3879,7 @@ async def on_approve(call: CallbackQuery):
         return
 
     faction = user.get("faction") or "Fresh Meat"
-    await upsert_user(
-        target_id,
-        status=Status.APPROVED.value,
-        approved_at=datetime.utcnow().isoformat(),
-        faction=faction,
-    )
-    await set_user_current_role(target_id, "recruit")  # ← НОВАЯ СТРОКА
+    await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
     link = await create_invite_link()
@@ -4427,19 +4417,6 @@ async def cmd_players(message: Message):
         )
         faction_rows = await cur.fetchall()
 
-        # ---- НОВЫЙ БЛОК: агрегирование по званиям (clan_title) ----
-        cur = await db.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(clan_title), ''), '—') AS title, COUNT(1) AS c
-            FROM users
-            WHERE status = 'joined'
-            GROUP BY title
-            ORDER BY c DESC, title ASC
-            """
-        )
-        rank_rows = await cur.fetchall()
-        # ---- КОНЕЦ НОВОГО БЛОКА ----
-
         cur = await db.execute(
             """
             SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
@@ -4456,15 +4433,6 @@ async def cmd_players(message: Message):
         lines.append("По фракциям:")
         for fac, c in faction_rows:
             lines.append(f"• {fac}: {c}")
-
-    # ---- НОВЫЙ БЛОК: вывод по званиям ----
-    if rank_rows:
-        lines.append("")  # пустая строка для разделения
-        lines.append("По званиям:")
-        for title, c in rank_rows:
-            lines.append(f"• {title}: {c}")
-    # ---- КОНЕЦ НОВОГО БЛОКА ----
-
     await message.answer("\n".join(lines))
 
     fname = f"clan_joined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -4928,64 +4896,38 @@ async def cmd_train_stats(message: Message):
                 """,
                 (date_str,),
             )
+            details = await cur.fetchall()
 
-        details = await cur.fetchall()
+            # joined users (только не-Резерв)
+            cur = await db.execute(
+                """
+                SELECT user_id, nickname, tg_link
+                FROM users
+                WHERE status = ?
+                  AND (faction IS NULL OR faction != 'Резерв')
+                """,
+                ("joined",),
+            )
+            joined_users = await cur.fetchall()
+            all_joined_ids = {u[0] for u in joined_users}
 
-        # joined users (только не-Резерв)
-        cur = await db.execute(
-            """
-            SELECT user_id, nickname, tg_link, current_role
-            FROM users
-            WHERE status = ?
-              AND (faction IS NULL OR faction != 'Резерв')
-            """,
-            ("joined",),
-        )
-        joined_users = await cur.fetchall()
-        all_joined_ids = {u[0] for u in joined_users}
+            # answered set (только не-Резерв, для согласованности)
+            cur = await db.execute(
+                """
+                SELECT DISTINCT t.user_id
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                """,
+                (date_str,),
+            )
+            answered_ids = {r[0] for r in await cur.fetchall()}
 
-        # answered set (только не-Резерв, для согласованности)
-        cur = await db.execute(
-            """
-            SELECT DISTINCT t.user_id
-            FROM training_attendance t
-            JOIN users u ON u.user_id = t.user_id
-            WHERE t.date = ?
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
-            """,
-            (date_str,),
-        )
-        answered_ids = {r[0] for r in await cur.fetchall()}
-
-        # список "Да" для ЦМД и Командиров отряда
-        cur = await db.execute(
-            """
-            SELECT u.user_id, u.nickname, u.tg_link, u.current_role
-            FROM training_attendance t
-            JOIN users u ON u.user_id = t.user_id
-            WHERE t.date = ?
-              AND t.response = 'yes'
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
-            """,
-            (date_str,),
-        )
-        yes_rows = await cur.fetchall()
-
-        cmd_yes: list[tuple[int, str | None, str | None]] = []
-        squad_yes: list[tuple[int, str | None, str | None]] = []
-
-        for uid, nick, link, role_code in yes_rows:
-            if not role_code:
-                continue
-            if role_code in CMD_ROLE_CODES:
-                cmd_yes.append((uid, nick, link))
-            if role_code in SQUAD_LEADER_ROLE_CODES:
-                squad_yes.append((uid, nick, link))
-
-        not_answered = [(uid, nick, link) for uid, nick, link, _role in joined_users if uid not in answered_ids]
+        not_answered = [(uid, nick, link) for uid, nick, link in joined_users if uid not in answered_ids]
         total_joined = len(all_joined_ids)
         not_answered_count = len(not_answered)
-    
+
         text_lines = [
             f"<b>Статистика ответов за {date_str}</b>",
             f"✅ Да: {agg.get('yes', 0)}",
@@ -4993,52 +4935,28 @@ async def cmd_train_stats(message: Message):
             f"⏰ Опоздаю: {agg.get('late', 0)}",
             f"⁉️ Не ответили: {not_answered_count} из {total_joined}",
         ]
-    
-        # Списки "Да" для ЦМД и Командиров отряда
-        def _format_user(nick: str | None, link: str | None, uid: int) -> str:
-            uname = username_from_tglink(link)
-            if nick:
-                return f"{nick} ({uname})" if uname and uname != "—" else nick
-            return uname if uname and uname != "—" else str(uid)
-    
-        if cmd_yes:
-            text_lines.append("")
-            text_lines.append('<b>ЦМД — ответили "Да"</b>')
-            for uid, nick, link in cmd_yes:
-                text_lines.append(f"• {_format_user(nick, link, uid)}")
-    
-        if squad_yes:
-            text_lines.append("")
-            text_lines.append('<b>Командиры отряда — ответили "Да"</b>')
-            for uid, nick, link in squad_yes:
-                text_lines.append(f"• {_format_user(nick, link, uid)}")
-    
+
         # append reasons list (grouped)
         if details:
             text_lines.append("")
             text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
-    
-        async with aiosqlite.connect(DB_PATH) as db:
-            for uid, resp, reason in details:
-                label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
-                reason = reason or "—"
-    
-                cur = await db.execute(
-                    "SELECT nickname, tg_link FROM users WHERE user_id=?",
-                    (uid,)
-                )
-                row = await cur.fetchone()
-    
-                if row and row[0]:
-                    disp = row[0]
-                else:
-                    uname = username_from_tglink(row[1]) if row else None
-                    disp = uname if uname and uname != "—" else str(uid)
-    
-                text_lines.append(f"{label}: {disp}: {reason}")
-    
-        # разделение длинного текста ...
-        full_text = "\n".join(text_lines)
+    async with aiosqlite.connect(DB_PATH) as db:
+        for uid, resp, reason in details:
+            label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
+            reason = reason or "—"
+            cur = await db.execute("SELECT nickname, tg_link FROM users WHERE user_id=?", (uid,))
+            row = await cur.fetchone()
+            if row and row[0]:
+                disp = row[0]
+            else:
+                # fallback to @username from tg_link
+                uname = username_from_tglink(row[1]) if row else None
+                disp = uname if uname and uname != "—" else str(uid)
+            text_lines.append(f"{label}: {disp}: {reason}")
+
+
+        # Разбиваем длинное сообщение на части, чтобы избежать "Bad Request: message is too long"
+        _full_text = "\n".join(text_lines)
         _max = 3900  # запас от лимита Telegram ~4096
         _buf = []
         _len = 0
@@ -5314,13 +5232,7 @@ async def cmd_accept(message: Message):
 
     # Set APPROVED and default faction if empty
     faction = user.get("faction") or "Fresh Meat"
-    await upsert_user(
-        target_id,
-        status=Status.APPROVED.value,
-        approved_at=datetime.utcnow().isoformat(),
-        faction=faction,
-    )
-    await set_user_current_role(target_id, "recruit")  # ← НОВАЯ СТРОКА
+    await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
     await ensure_joined_if_member(target_id)
 
     link = await create_invite_link()
