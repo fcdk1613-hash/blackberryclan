@@ -4899,35 +4899,36 @@ async def cmd_train_stats(message: Message):
         return
 
     # SINGLE-DAY: show detailed stats incl. 'Не ответили' and CSV
-if not date_to:
-    date_str = date_from
-    async with aiosqlite.connect(DB_PATH) as db:
-        # aggregate yes/no/late (только не-Резерв)
-        cur = await db.execute(
-            """
-            SELECT t.response, COUNT(*)
-            FROM training_attendance t
-            JOIN users u ON u.user_id = t.user_id
-            WHERE t.date = ?
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
-            GROUP BY t.response
-            """,
-            (date_str,),
-        )
-        agg = {row[0]: row[1] for row in await cur.fetchall()}
+    if not date_to:
+        date_str = date_from
+        async with aiosqlite.connect(DB_PATH) as db:
+            # aggregate yes/no/late (только не-Резерв)
+            cur = await db.execute(
+                """
+                SELECT t.response, COUNT(*)
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                GROUP BY t.response
+                """,
+                (date_str,),
+            )
+            agg = {row[0]: row[1] for row in await cur.fetchall()}
 
-        # details for no/late (только не-Резерв)
-        cur = await db.execute(
-            """
-            SELECT t.user_id, t.response, t.reason
-            FROM training_attendance t
-            JOIN users u ON u.user_id = t.user_id
-            WHERE t.date = ?
-              AND t.response IN ('no','late')
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
-            """,
-            (date_str,),
-        )
+            # details for no/late (только не-Резерв)
+            cur = await db.execute(
+                """
+                SELECT t.user_id, t.response, t.reason
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND t.response IN ('no','late')
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                """,
+                (date_str,),
+            )
+
         details = await cur.fetchall()
 
         # joined users (только не-Резерв)
