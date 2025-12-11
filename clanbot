@@ -5012,30 +5012,32 @@ if not date_to:
             for uid, nick, link in squad_yes:
                 text_lines.append(f"• {_format_user(nick, link, uid)}")
     
-        # append reasons list (grouped)
-        if details:
-            text_lines.append("")
-            text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
-        async with aiosqlite.connect(DB_PATH) as db:
-        # append reasons list (grouped)
-        if details:
-            text_lines.append("")
-            text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
+    # append reasons list (grouped)
+    if details:
+        text_lines.append("")
+        text_lines.append("<b>Причины (Нет/Опоздаю)</b>")
+
+    async with aiosqlite.connect(DB_PATH) as db:
         for uid, resp, reason in details:
             label = "❌ Нет" if resp == "no" else "⏰ Опоздаю"
             reason = reason or "—"
-            cur = await db.execute("SELECT nickname, tg_link FROM users WHERE user_id=?", (uid,))
+
+            cur = await db.execute(
+                "SELECT nickname, tg_link FROM users WHERE user_id=?",
+                (uid,)
+            )
             row = await cur.fetchone()
+
             if row and row[0]:
                 disp = row[0]
             else:
-                # fallback to @username from tg_link
                 uname = username_from_tglink(row[1]) if row else None
                 disp = uname if uname and uname != "—" else str(uid)
+
             text_lines.append(f"{label}: {disp}: {reason}")
 
-        # Разбиваем длинное сообщение на части, чтобы избежать "Bad Request: message is too long"
-        _full_text = "\n".join(text_lines)
+    # разделение длинного текста ...
+    full_text = "\n".join(text_lines)
         _max = 3900  # запас от лимита Telegram ~4096
         _buf = []
         _len = 0
