@@ -4372,67 +4372,120 @@ async def _rcon_read_packet(reader: asyncio.StreamReader) -> tuple[int, int, str
     payload = data[8:-2]  # strip trailing \x00\x00
     return req_id, req_type, payload.decode("utf-8", errors="ignore")
 
-async def squad_rcon_command(cmd: str) -> str:
+# ======= RCON connection (persistent) =======
+import time
+
+_RCON_LOCK = asyncio.Lock()
+_RCON_READER: asyncio.StreamReader | None = None
+_RCON_WRITER: asyncio.StreamWriter | None = None
+_RCON_AUTHED: bool = False
+_RCON_LAST_USED: float = 0.0
+
+async def _rcon_close():
+    global _RCON_READER, _RCON_WRITER, _RCON_AUTHED
+    w = _RCON_WRITER
+    _RCON_READER = None
+    _RCON_WRITER = None
+    _RCON_AUTHED = False
+    if w is not None:
+        try:
+            w.close()
+            await w.wait_closed()
+        except Exception:
+            pass
+
+async def _rcon_ensure_connected():
+    global _RCON_READER, _RCON_WRITER, _RCON_AUTHED, _RCON_LAST_USED
+
     if not (SQUAD_RCON_HOST and SQUAD_RCON_PORT and SQUAD_RCON_PASS):
         raise RuntimeError("RCON не настроен (SQUAD_RCON_HOST/PORT/PASS).")
 
-    reader, writer = await asyncio.open_connection(SQUAD_RCON_HOST, SQUAD_RCON_PORT)
+    # если давно не пользовались — переподключимся (чтобы не держать “вечный” сокет)
+    now = time.monotonic()
+    if _RCON_WRITER is not None and (now - _RCON_LAST_USED) > 120:
+        await _rcon_close()
 
-    # разные id для auth и command — чтобы проще матчить ответы
-    auth_id = random.randint(1000, 2000000000)
-    cmd_id = auth_id + 1
+    if _RCON_WRITER is None:
+        _RCON_READER, _RCON_WRITER = await asyncio.open_connection(SQUAD_RCON_HOST, SQUAD_RCON_PORT)
+        _RCON_AUTHED = False
 
-    try:
-        # 1) AUTH
-        writer.write(_rcon_pack(auth_id, RCON_TYPE_AUTH, SQUAD_RCON_PASS))
-        await writer.drain()
+    if not _RCON_AUTHED:
+        auth_id = random.randint(1000, 2000000000)
+        _RCON_WRITER.write(_rcon_pack(auth_id, RCON_TYPE_AUTH, SQUAD_RCON_PASS))
+        await _RCON_WRITER.drain()
 
-        # По Source RCON после AUTH часто приходит RESPONSE_VALUE (пустой), а затем AUTH_RESPONSE.
-        # Нам важно дождаться пакета с req_id == auth_id (успех) или req_id == -1 (провал).
         authed = False
-        for _ in range(5):
-            rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(reader), timeout=SQUAD_RCON_TIMEOUT)
+        for _ in range(6):
+            rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(_RCON_READER), timeout=SQUAD_RCON_TIMEOUT)
             if rid == -1:
+                await _rcon_close()
                 raise RuntimeError("RCON auth failed (bad password or not allowed).")
             if rid == auth_id:
                 authed = True
                 break
+
         if not authed:
+            await _rcon_close()
             raise RuntimeError("RCON auth timeout/no auth response.")
 
-        # 2) EXEC COMMAND
-        writer.write(_rcon_pack(cmd_id, RCON_TYPE_EXEC_COMMAND, cmd))
-        await writer.drain()
+        _RCON_AUTHED = True
 
-        # 3) READ RESPONSES
-        # Ответ может приходить несколькими пакетами.
-        chunks: list[str] = []
-        # Читаем пока приходят пакеты с нашим cmd_id или пока не истечёт таймаут.
-        while True:
-            try:
-                rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(reader), timeout=0.7)
-            except asyncio.TimeoutError:
-                break
+    _RCON_LAST_USED = now
 
-            if rid in (-1, 0):
-                # иногда прилетают "посторонние" пакеты — игнорим
-                continue
+async def squad_rcon_command(cmd: str) -> str:
+    global _RCON_LAST_USED
 
-            if rid != cmd_id:
-                continue
+    async with _RCON_LOCK:
+        # 1) гарантируем подключение/авторизацию
+        await _rcon_ensure_connected()
 
-            # обычно ответ = RESPONSE_VALUE
-            if payload:
-                chunks.append(payload)
-
-        return "\n".join(chunks).strip()
-
-    finally:
-        writer.close()
+        # 2) отправляем команду
+        cmd_id = random.randint(1000, 2000000000)
         try:
-            await writer.wait_closed()
-        except Exception:
-            pass
+            _RCON_WRITER.write(_rcon_pack(cmd_id, RCON_TYPE_EXEC_COMMAND, cmd))
+            await _RCON_WRITER.drain()
+
+            chunks: list[str] = []
+            while True:
+                try:
+                    rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(_RCON_READER), timeout=0.7)
+                except asyncio.TimeoutError:
+                    break
+
+                if rid in (-1, 0):
+                    continue
+                if rid != cmd_id:
+                    continue
+                if payload:
+                    chunks.append(payload)
+
+            _RCON_LAST_USED = time.monotonic()
+            return "\n".join(chunks).strip()
+
+        except (ConnectionResetError, BrokenPipeError, OSError) as e:
+            # соединение умерло — закрываем и даём один аккуратный ретрай
+            await _rcon_close()
+            await _rcon_ensure_connected()
+
+            cmd_id2 = random.randint(1000, 2000000000)
+            _RCON_WRITER.write(_rcon_pack(cmd_id2, RCON_TYPE_EXEC_COMMAND, cmd))
+            await _RCON_WRITER.drain()
+
+            chunks: list[str] = []
+            while True:
+                try:
+                    rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(_RCON_READER), timeout=0.7)
+                except asyncio.TimeoutError:
+                    break
+                if rid in (-1, 0):
+                    continue
+                if rid != cmd_id2:
+                    continue
+                if payload:
+                    chunks.append(payload)
+
+            _RCON_LAST_USED = time.monotonic()
+            return "\n".join(chunks).strip()
 
 async def get_online_bb_nicks() -> set[str]:
     raw = await squad_rcon_command("ListPlayers")
@@ -4445,6 +4498,18 @@ async def get_online_bb_nicks() -> set[str]:
         if nick:
             online.add(nick.lower())
     return online
+
+_ONLINE_CACHE: set[str] | None = None
+_ONLINE_CACHE_TS: float = 0.0
+
+async def get_online_bb_nicks_cached(ttl_seconds: float = 5.0) -> set[str]:
+    global _ONLINE_CACHE, _ONLINE_CACHE_TS
+    now = time.monotonic()
+    if _ONLINE_CACHE is not None and (now - _ONLINE_CACHE_TS) <= ttl_seconds:
+        return _ONLINE_CACHE
+    _ONLINE_CACHE = await get_online_bb_nicks()
+    _ONLINE_CACHE_TS = now
+    return _ONLINE_CACHE
 # ======= Players list (admins/mods) =======
 
 async def fetch_joined_players(limit: int = 2000):
@@ -5022,7 +5087,7 @@ async def on_train_online(call: CallbackQuery):
 
     # 1) онлайн с сервера
     try:
-        online_bb = await get_online_bb_nicks()
+        online_bb = await get_online_bb_nicks_cached(ttl_seconds=5.0)
     except Exception as e:
         await call.answer("RCON недоступен.", show_alert=True)
         try:
