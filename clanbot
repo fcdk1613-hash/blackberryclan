@@ -4103,10 +4103,6 @@ async def on_career_self(call: CallbackQuery):
         await call.answer("Профиль не найден. Нажмите /start", show_alert=True)
         return
 
-    raw = [r[0] for r in rows]
-    raw = [norm_role(x) or x for x in raw]
-    return sorted(set(raw))
-
     image_path = generate_role_tree_image(
         user_id=user_id,
         opened_roles=opened,
