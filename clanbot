@@ -1078,17 +1078,20 @@ async def get_user(user_id: int) -> Optional[dict]:
 # ======= ROLES DB HELPERS =======
 
 async def get_user_roles(user_id: int) -> list[str]:
-    """Список кодов ролей, уже открытых игроком."""
+    """
+    Возвращает список ролей пользователя из БД.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT role_code FROM user_roles WHERE user_id=?",
-            (user_id,),
-        )
-        rows = await cur.fetchall()
-    user_id = int(user.get("user_id") or call.from_user.id)
-    opened = set(await get_user_roles(user_id))
-    current_role = user.get("current_role")
-    return [r[0] for r in rows]
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT role FROM user_roles WHERE user_id = ?",
+            (int(user_id),),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    raw = [r["role"] if isinstance(r, aiosqlite.Row) else r[0] for r in rows]
+    raw = [norm_role(x) or x for x in raw]   # если norm_role есть в проекте
+    return sorted(set(raw))
 
 async def add_user_role(user_id: int, role_code: str) -> None:
     """Пометить роль как открытую (idempotent)."""
