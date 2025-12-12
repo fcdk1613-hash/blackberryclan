@@ -4921,6 +4921,20 @@ async def cmd_train_stats(message: Message):
             )
             details = await cur.fetchall()
 
+            # yes responders with role (только не-Резерв) — для списка ЦМД/Командир отряда
+            cur = await db.execute(
+                """
+                SELECT t.user_id, u.nickname, u.tg_link, u.current_role
+                FROM training_attendance t
+                JOIN users u ON u.user_id = t.user_id
+                WHERE t.date = ?
+                  AND t.response = 'yes'
+                  AND (u.faction IS NULL OR u.faction != 'Резерв')
+                """,
+                (date_str,),
+            )
+            yes_rows = await cur.fetchall()
+
             # joined users (только не-Резерв)
             cur = await db.execute(
                 """
@@ -4958,6 +4972,31 @@ async def cmd_train_stats(message: Message):
             f"⏰ Опоздаю: {agg.get('late', 0)}",
             f"⁉️ Не ответили: {not_answered_count} из {total_joined}",
         ]
+
+        # --- NEW: ЦМД и Командиры отряда, которые ответили "Да" ---
+        cmd_yes: list[str] = []
+        squad_yes: list[str] = []
+
+        for uid, nick, link, role in (yes_rows or []):
+            role_title = get_role_title(role) if role is not None else ""
+            disp = nick or username_from_tglink(link) or str(uid)
+
+            if "ЦМД" in (role_title or ""):
+                cmd_yes.append(disp)
+            if "Командир отряда" in (role_title or ""):
+                squad_yes.append(disp)
+
+        if cmd_yes or squad_yes:
+            text_lines.append("")
+            if cmd_yes:
+                text_lines.append("<b>ЦМД (ответили Да)</b>")
+                for name in cmd_yes:
+                    text_lines.append(f"• {name}")
+            if squad_yes:
+                text_lines.append("<b>Командиры отряда (ответили Да)</b>")
+                for name in squad_yes:
+                    text_lines.append(f"• {name}")
+        # --- END NEW ---
 
         # append reasons list (grouped)
         if details:
