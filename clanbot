@@ -4094,14 +4094,16 @@ async def on_elo_history(call: CallbackQuery):
 
 @dp.callback_query(F.data == "career:self")
 async def on_career_self(call: CallbackQuery):
-    """
-    Показывает дерево ролей текущего игрока.
-    Вызывается из /profile по кнопке «Моя карьера».
-    """
     user = await get_user(call.from_user.id)
     if not user:
         await call.answer("Профиль не найден. Нажмите /start", show_alert=True)
         return
+
+    # ✅ ВАЖНО: user_id должен быть определён ДО generate_role_tree_image
+    user_id = int(user.get("user_id") or call.from_user.id)
+
+    opened = set(await get_user_roles(user_id))
+    current_role = user.get("current_role")
 
     image_path = generate_role_tree_image(
         user_id=user_id,
