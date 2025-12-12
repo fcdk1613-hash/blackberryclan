@@ -4350,23 +4350,42 @@ def parse_listplayers_to_names(raw: str) -> list[str]:
     return [n for n in (x.strip() for x in names) if n]
 
 async def squad_rcon_command(cmd: str) -> str:
-    """
-    Требует: pip install rcon
-    """
     if not (SQUAD_RCON_HOST and SQUAD_RCON_PORT and SQUAD_RCON_PASS):
-        raise RuntimeError("RCON не настроен (SQUAD_RCON_HOST/PORT/PASS).")
+        raise RuntimeError("RCON не настроен")
 
-    def _run():
-        from rcon.source import Client  # pip install rcon
-        with Client(
-            SQUAD_RCON_HOST,
-            SQUAD_RCON_PORT,
-            passwd=SQUAD_RCON_PASS,
-            timeout=SQUAD_RCON_TIMEOUT,
-        ) as c:
-            return c.run(cmd)
+    reader, writer = await asyncio.open_connection(
+        SQUAD_RCON_HOST,
+        SQUAD_RCON_PORT
+    )
 
-    return await asyncio.to_thread(_run)
+    try:
+        # авторизация
+        writer.write((SQUAD_RCON_PASS + "\n").encode())
+        await writer.drain()
+
+        await asyncio.sleep(0.2)
+
+        # команда
+        writer.write((cmd + "\n").encode())
+        await writer.drain()
+
+        await asyncio.sleep(0.5)
+
+        data = b""
+        while True:
+            try:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+            except asyncio.TimeoutError:
+                break
+            if not chunk:
+                break
+            data += chunk
+
+        return data.decode(errors="ignore")
+
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 async def get_online_bb_nicks() -> set[str]:
     raw = await squad_rcon_command("ListPlayers")
