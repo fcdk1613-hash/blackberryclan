@@ -1083,7 +1083,7 @@ async def get_user_roles(user_id: int) -> list[str]:
             cols = [r[1] for r in await cur.fetchall()]  # (cid, name, type, notnull, dflt, pk)
 
         # какие имена колонок чаще всего встречаются
-        candidates = ["role", "role_name", "name", "title"]
+        candidates = ["role", "role_name", "name", "title", "role_code"]
         role_col = next((c for c in candidates if c in cols), None)
         if not role_col:
             raise RuntimeError(f"user_roles has no role column. Found columns: {cols}")
