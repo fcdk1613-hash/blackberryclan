@@ -55,6 +55,12 @@ DB_PATH = "blackberry_bot.db"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in code (fill BOT_TOKEN at the top of main.py)")
 
+# ======= Squad RCON (configure via env, do NOT hardcode secrets) =======
+SQUAD_RCON_HOST = os.getenv("SQUAD_RCON_HOST", "")
+SQUAD_RCON_PORT = int(os.getenv("SQUAD_RCON_PORT", "0") or 0)
+SQUAD_RCON_PASS = os.getenv("SQUAD_RCON_PASS", "")
+SQUAD_RCON_TIMEOUT = float(os.getenv("SQUAD_RCON_TIMEOUT", "3.0") or 3.0)
+
 # ======= DB LAYER =======
 
 CREATE_TOURNAMENT_HISTORY_SQL = """
@@ -1340,6 +1346,11 @@ def phone_kb() -> ReplyKeyboardMarkup:
 def subscription_check_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🔔 Проверить подписку", callback_data="check_sub")
+    return kb.adjust(1).as_markup()
+
+def training_stats_kb(date_str: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🟢 Статус онлайн", callback_data=f"train_online:{date_str}")
     return kb.adjust(1).as_markup()
 
 def apply_kb() -> InlineKeyboardMarkup:
@@ -4286,6 +4297,86 @@ def username_from_tglink(link: str | None) -> str:
     if link.startswith("@"):
         return link
     return "—"
+
+# ======= Squad online via RCON =======
+import re as _re
+_BB_TAG_RE = _re.compile(r"^\s*\[BB\]\s*", _re.IGNORECASE)
+
+def normalize_server_nick(name: str) -> str:
+    # "[BB] Nick" -> "Nick"
+    if not name:
+        return ""
+    name = name.strip()
+    name = _BB_TAG_RE.sub("", name).strip()
+    return name
+
+def normalize_bot_nick(name: str) -> str:
+    # "Nick(Name)" -> "Nick"
+    if not name:
+        return ""
+    name = name.strip()
+    if "(" in name:
+        name = name.split("(", 1)[0].strip()
+    return name
+
+def parse_listplayers_to_names(raw: str) -> list[str]:
+    """
+    Парсер на случай разного формата вывода ListPlayers.
+    Берём строки с [BB], иначе пытаемся вытащить последнее поле после | или ,.
+    """
+    if not raw:
+        return []
+    names: list[str] = []
+    for line in raw.splitlines():
+        s = (line or "").strip()
+        if not s:
+            continue
+        if "[BB]" in s.upper():
+            idx = s.upper().find("[BB]")
+            names.append(s[idx:].strip())
+            continue
+        if "|" in s:
+            cand = s.split("|")[-1].strip()
+            if cand:
+                names.append(cand)
+            continue
+        if "," in s:
+            cand = s.split(",")[-1].strip()
+            if cand:
+                names.append(cand)
+            continue
+    return [n for n in (x.strip() for x in names) if n]
+
+async def squad_rcon_command(cmd: str) -> str:
+    """
+    Требует: pip install rcon
+    """
+    if not (SQUAD_RCON_HOST and SQUAD_RCON_PORT and SQUAD_RCON_PASS):
+        raise RuntimeError("RCON не настроен (SQUAD_RCON_HOST/PORT/PASS).")
+
+    def _run():
+        from rcon.source import Client  # pip install rcon
+        with Client(
+            SQUAD_RCON_HOST,
+            SQUAD_RCON_PORT,
+            passwd=SQUAD_RCON_PASS,
+            timeout=SQUAD_RCON_TIMEOUT,
+        ) as c:
+            return c.run(cmd)
+
+    return await asyncio.to_thread(_run)
+
+async def get_online_bb_nicks() -> set[str]:
+    raw = await squad_rcon_command("ListPlayers")
+    names = parse_listplayers_to_names(raw)
+    online: set[str] = set()
+    for full in names:
+        if not full or "[BB]" not in full.upper():
+            continue
+        nick = normalize_server_nick(full)
+        if nick:
+            online.add(nick.lower())
+    return online
 # ======= Players list (admins/mods) =======
 
 async def fetch_joined_players(limit: int = 2000):
@@ -4848,7 +4939,99 @@ async def fetch_training_stats(date_from: str, date_to: str | None = None):
             rows = await cur.fetchall()
             return {"single": False, "rows": rows}
 
+@dp.callback_query(F.data.startswith("train_online:"))
+async def on_train_online(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
 
+    try:
+        _, date_str = (call.data or "").split(":", 1)
+        date_str = date_str.strip()
+    except Exception:
+        await call.answer("Некорректная дата.", show_alert=True)
+        return
+
+    # 1) онлайн с сервера
+    try:
+        online_bb = await get_online_bb_nicks()
+    except Exception as e:
+        await call.answer("RCON недоступен.", show_alert=True)
+        try:
+            await call.message.answer(f"❌ Не удалось получить онлайн по RCON: {e}")
+        except Exception:
+            pass
+        return
+
+    # 2) ответы из БД
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT u.user_id, u.nickname, u.tg_link
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ?
+              AND t.response = 'yes'
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+            """,
+            (date_str,),
+        )
+        yes_rows = await cur.fetchall()
+
+        cur = await db.execute(
+            """
+            SELECT u.user_id, u.nickname
+            FROM training_attendance t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.date = ?
+              AND (u.faction IS NULL OR u.faction != 'Резерв')
+            """,
+            (date_str,),
+        )
+        answered_rows = await cur.fetchall()
+
+    answered_set = set()
+    for _uid, nick in answered_rows:
+        bn = normalize_bot_nick(nick or "")
+        if bn:
+            answered_set.add(bn.lower())
+
+    yes_not_online = []
+    for _uid, nick, link in yes_rows:
+        bn = normalize_bot_nick(nick or "")
+        if bn and bn.lower() not in online_bb:
+            yes_not_online.append((bn, link))
+
+    online_no_answer = [n for n in sorted(online_bb) if n not in answered_set]
+
+    # 3) вывод
+    lines = [f"<b>🟢 Онлайн-сверка за {date_str}</b>"]
+
+    lines.append("\n<b>✅ Ответили «Да», но сейчас не онлайн:</b>")
+    if not yes_not_online:
+        lines.append("— нет —")
+    else:
+        for bn, link in yes_not_online:
+            uname = username_from_tglink(link)
+            if uname and uname != "—":
+                lines.append(f"• {bn} — {uname}")
+            else:
+                lines.append(f"• {bn}")
+
+    lines.append("\n<b>⚠️ Сейчас онлайн, но сегодня не отвечали:</b>")
+    if not online_no_answer:
+        lines.append("— нет —")
+    else:
+        for bn_lower in online_no_answer:
+            lines.append(f"• {bn_lower}")
+
+    try:
+        await call.message.answer("\n".join(lines))
+    finally:
+        try:
+            await call.answer("Готово.")
+        except Exception:
+            pass
 
 
 @dp.message(Command("train_stats"))  # /train_stats [YYYY-MM-DD] or /train_stats YYYY-MM-DD YYYY-MM-DD
@@ -5022,16 +5205,26 @@ async def cmd_train_stats(message: Message):
         _max = 3900  # запас от лимита Telegram ~4096
         _buf = []
         _len = 0
+        _first = True
+        
         for _line in _full_text.splitlines():
             if _len + len(_line) + 1 > _max:
-                await message.answer("\n".join(_buf) if _buf else ".")
+                if _first:
+                    await message.answer("\n".join(_buf) if _buf else ".", reply_markup=training_stats_kb(date_str))
+                    _first = False
+                else:
+                    await message.answer("\n".join(_buf) if _buf else ".")
                 _buf = [_line]
                 _len = len(_line) + 1
             else:
                 _buf.append(_line)
                 _len += len(_line) + 1
+        
         if _buf:
-            await message.answer("\n".join(_buf))
+            if _first:
+                await message.answer("\n".join(_buf), reply_markup=training_stats_kb(date_str))
+            else:
+                await message.answer("\n".join(_buf))
         # Build and send CSV with not answered
         import csv
         csv_name = f"not_answered_{date_str}.csv"
