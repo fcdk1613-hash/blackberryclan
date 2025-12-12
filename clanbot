@@ -1085,6 +1085,9 @@ async def get_user_roles(user_id: int) -> list[str]:
             (user_id,),
         )
         rows = await cur.fetchall()
+    user_id = int(user.get("user_id") or call.from_user.id)
+    opened = set(await get_user_roles(user_id))
+    current_role = user.get("current_role")
     return [r[0] for r in rows]
 
 async def add_user_role(user_id: int, role_code: str) -> None:
@@ -4099,10 +4102,6 @@ async def on_career_self(call: CallbackQuery):
     if not user:
         await call.answer("Профиль не найден. Нажмите /start", show_alert=True)
         return
-
-    user_id = int(user.get("user_id") or call.from_user.id)
-    opened = set(await get_user_roles(user_id))
-    current_role = user.get("current_role")
 
     raw = [r[0] for r in rows]
     raw = [norm_role(x) or x for x in raw]
