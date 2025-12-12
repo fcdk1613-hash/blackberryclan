@@ -4349,43 +4349,90 @@ def parse_listplayers_to_names(raw: str) -> list[str]:
             continue
     return [n for n in (x.strip() for x in names) if n]
 
+import struct
+import random
+
+RCON_TYPE_RESPONSE_VALUE = 0
+RCON_TYPE_EXEC_COMMAND = 2
+RCON_TYPE_AUTH = 3
+
+def _rcon_pack(req_id: int, req_type: int, payload: str) -> bytes:
+    body = struct.pack("<ii", req_id, req_type) + payload.encode("utf-8") + b"\x00\x00"
+    return struct.pack("<i", len(body)) + body
+
+async def _rcon_read_packet(reader: asyncio.StreamReader) -> tuple[int, int, str]:
+    # length (int32 little-endian)
+    raw_len = await reader.readexactly(4)
+    (length,) = struct.unpack("<i", raw_len)
+    if length < 10 or length > 65536:
+        raise RuntimeError(f"Bad RCON packet length: {length}")
+
+    data = await reader.readexactly(length)
+    req_id, req_type = struct.unpack("<ii", data[:8])
+    payload = data[8:-2]  # strip trailing \x00\x00
+    return req_id, req_type, payload.decode("utf-8", errors="ignore")
+
 async def squad_rcon_command(cmd: str) -> str:
     if not (SQUAD_RCON_HOST and SQUAD_RCON_PORT and SQUAD_RCON_PASS):
-        raise RuntimeError("RCON не настроен")
+        raise RuntimeError("RCON не настроен (SQUAD_RCON_HOST/PORT/PASS).")
 
-    reader, writer = await asyncio.open_connection(
-        SQUAD_RCON_HOST,
-        SQUAD_RCON_PORT
-    )
+    reader, writer = await asyncio.open_connection(SQUAD_RCON_HOST, SQUAD_RCON_PORT)
+
+    # разные id для auth и command — чтобы проще матчить ответы
+    auth_id = random.randint(1000, 2000000000)
+    cmd_id = auth_id + 1
 
     try:
-        # авторизация
-        writer.write((SQUAD_RCON_PASS + "\n").encode())
+        # 1) AUTH
+        writer.write(_rcon_pack(auth_id, RCON_TYPE_AUTH, SQUAD_RCON_PASS))
         await writer.drain()
 
-        await asyncio.sleep(0.2)
+        # По Source RCON после AUTH часто приходит RESPONSE_VALUE (пустой), а затем AUTH_RESPONSE.
+        # Нам важно дождаться пакета с req_id == auth_id (успех) или req_id == -1 (провал).
+        authed = False
+        for _ in range(5):
+            rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(reader), timeout=SQUAD_RCON_TIMEOUT)
+            if rid == -1:
+                raise RuntimeError("RCON auth failed (bad password or not allowed).")
+            if rid == auth_id:
+                authed = True
+                break
+        if not authed:
+            raise RuntimeError("RCON auth timeout/no auth response.")
 
-        # команда
-        writer.write((cmd + "\n").encode())
+        # 2) EXEC COMMAND
+        writer.write(_rcon_pack(cmd_id, RCON_TYPE_EXEC_COMMAND, cmd))
         await writer.drain()
 
-        await asyncio.sleep(0.5)
-
-        data = b""
+        # 3) READ RESPONSES
+        # Ответ может приходить несколькими пакетами.
+        chunks: list[str] = []
+        # Читаем пока приходят пакеты с нашим cmd_id или пока не истечёт таймаут.
         while True:
             try:
-                chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                rid, rtype, payload = await asyncio.wait_for(_rcon_read_packet(reader), timeout=0.7)
             except asyncio.TimeoutError:
                 break
-            if not chunk:
-                break
-            data += chunk
 
-        return data.decode(errors="ignore")
+            if rid in (-1, 0):
+                # иногда прилетают "посторонние" пакеты — игнорим
+                continue
+
+            if rid != cmd_id:
+                continue
+
+            # обычно ответ = RESPONSE_VALUE
+            if payload:
+                chunks.append(payload)
+
+        return "\n".join(chunks).strip()
 
     finally:
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
 
 async def get_online_bb_nicks() -> set[str]:
     raw = await squad_rcon_command("ListPlayers")
