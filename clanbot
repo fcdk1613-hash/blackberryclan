@@ -3880,6 +3880,7 @@ async def on_approve(call: CallbackQuery):
 
     faction = user.get("faction") or "Fresh Meat"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
+    await set_user_current_role(target_id, "recruit")  # ← НОВАЯ СТРОКА
     await ensure_joined_if_member(target_id)
 
     link = await create_invite_link()
@@ -4417,6 +4418,19 @@ async def cmd_players(message: Message):
         )
         faction_rows = await cur.fetchall()
 
+        # ---- НОВЫЙ БЛОК: агрегирование по званиям (clan_title) ----
+        cur = await db.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(clan_title), ''), '—') AS title, COUNT(1) AS c
+            FROM users
+            WHERE status = 'joined'
+            GROUP BY title
+            ORDER BY c DESC, title ASC
+            """
+        )
+        rank_rows = await cur.fetchall()
+        # ---- КОНЕЦ НОВОГО БЛОКА ----
+
         cur = await db.execute(
             """
             SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
@@ -4433,6 +4447,15 @@ async def cmd_players(message: Message):
         lines.append("По фракциям:")
         for fac, c in faction_rows:
             lines.append(f"• {fac}: {c}")
+
+    # ---- НОВЫЙ БЛОК: вывод по званиям ----
+    if rank_rows:
+        lines.append("")  # пустая строка для разделения
+        lines.append("По званиям:")
+        for title, c in rank_rows:
+            lines.append(f"• {title}: {c}")
+    # ---- КОНЕЦ НОВОГО БЛОКА ----
+
     await message.answer("\n".join(lines))
 
     fname = f"clan_joined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -5233,6 +5256,7 @@ async def cmd_accept(message: Message):
     # Set APPROVED and default faction if empty
     faction = user.get("faction") or "Fresh Meat"
     await upsert_user(target_id, status=Status.APPROVED.value, approved_at=datetime.utcnow().isoformat(), faction=faction)
+    await set_user_current_role(target_id, "recruit")  # ← НОВАЯ СТРОКА
     await ensure_joined_if_member(target_id)
 
     link = await create_invite_link()
