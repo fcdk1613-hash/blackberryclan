@@ -5,6 +5,8 @@
 # Removal checklist updated: items 1 (DB) and 3 (Discord) are MANUAL via "Выполнено".
 # Only item 2 (remove from Telegram clan chat) is automatic.
 import asyncio
+from dotenv import load_dotenv
+load_dotenv("rcon.env")
 import logging
 from datetime import datetime, timedelta, date
 from enum import Enum
