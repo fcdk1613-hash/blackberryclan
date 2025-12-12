@@ -478,6 +478,12 @@ ROLE_GRAPH: dict[str, list[str]] = {
     "heavy_multiclass_instr": ["heavy_squad_replace"],
 }
 
+# Нормализация графа: гарантируем, что все дети существуют как ключи и что нет дублей
+for parent, children in list(ROLE_GRAPH.items()):
+    ROLE_GRAPH[parent] = list(dict.fromkeys(children))  # убираем дубли, сохраняя порядок
+    for ch in ROLE_GRAPH[parent]:
+        ROLE_GRAPH.setdefault(ch, [])
+
 # Родители считаем автоматически (на основе ROLE_GRAPH)
 ROLE_PARENTS: dict[str, list[str]] = {}
 for parent, children in ROLE_GRAPH.items():
@@ -491,85 +497,34 @@ def get_role_title(code: str | None) -> str:
 
 # ===== Логика веток и специальных переводов по ролям =====
 
-# Ветка Мехвод-наводчик
-MECH_BRANCH: set[str] = {
-    "mech_nav",
-    "mech_nav_school",
-    "mech_nav_driver_gunner",
-    "mech_nav_squad_leader",
-    "mech_nav_tactics",
-    "crew_cmd_profile",
-    "crew_cmd_instr",
-    "to_infantry",
-    "officer_school",
-    "leadership",
-    "asst_squad_leader",
-    "squad_leader",
-    "asst_faction_leader",
-    "faction_leader",
-}
+def _collect_reachable(start: str) -> set[str]:
+    """
+    Возвращает множество всех ролей, достижимых из start по ROLE_GRAPH (включая start).
+    Это гарантирует, что ветки не рассинхронизируются с графом и не требуют ручного
+    обновления при добавлении/удалении ребёр.
+    """
+    from collections import deque
 
-# Ветка "стрелок-медик-труба" целиком (для перевода из мехов)
-MEDIC_BRANCH: set[str] = {
-    "medic_tube_root",
-    "medic_tube_school",
-    "medic",
-    "tube",
-    "squad_sergeant_cadet",
-    "squad_instr",
-    "to_tech",
-    "squad_brigadier",
-    "squad_replace_root",
-    "cmd_replace",
-    "cmd_profile",
-    "cmd_instr",
-    "sergeant_school_sl",
-    "medic_tube_from_sl",
-    "squad_profile_sl",
-    "cmd_replace_sl",
-}
+    seen: set[str] = set()
+    q = deque([start])
+    while q:
+        v = q.popleft()
+        if v in seen:
+            continue
+        seen.add(v)
+        for ch in ROLE_GRAPH.get(v, []):
+            if ch not in seen:
+                q.append(ch)
+    return seen
 
-# Только подветка "стрелок-медик-труба(школа)"
-MEDIC_SCHOOL_BRANCH: set[str] = {
-    "medic_tube_school",
-    "medic",
-    "tube",
-    "squad_sergeant_cadet",
-    "squad_instr",
-    "to_tech",
-    "squad_brigadier",
-    "cmd_replace",
-    "cmd_profile",
-    "cmd_instr",
-}
 
-# Ветка лёгких специалистов
-LIGHT_BRANCH: set[str] = {
-    "light_specs",
-    "light_mg",
-    "light_gp",
-    "light_marksman",
-    "light_squad_cadet",
-    "light_squad_profile",
-    "light_squad_instr",
-    "light_multiclass",
-    "light_multiclass_instr",
-}
+# Ветки считаем автоматически из ROLE_GRAPH (без ручных дублей)
+MECH_BRANCH: set[str] = _collect_reachable("mech_nav")
+MEDIC_BRANCH: set[str] = _collect_reachable("medic_tube_root")
+MEDIC_SCHOOL_BRANCH: set[str] = _collect_reachable("medic_tube_school")
+LIGHT_BRANCH: set[str] = _collect_reachable("light_specs")
+HEAVY_BRANCH: set[str] = _collect_reachable("heavy_specs")
 
-# Ветка тяжёлых специалистов
-HEAVY_BRANCH: set[str] = {
-    "heavy_specs",
-    "heavy_mg",
-    "heavy_sapper",
-    "heavy_tandem",
-    "heavy_sniper_school",
-    "heavy_sniper",
-    "heavy_squad_replace",
-    "heavy_squad_profile",
-    "heavy_squad_instr",
-    "heavy_multiclass",
-    "heavy_multiclass_instr",
-}
 
 # Индекс роли в общем порядке — для выбора "самой продвинутой" открытой роли
 ROLE_INDEX: dict[str, int] = {code: i for i, code in enumerate(ROLE_ORDER)}
