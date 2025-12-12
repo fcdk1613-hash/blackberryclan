@@ -1078,19 +1078,24 @@ async def get_user(user_id: int) -> Optional[dict]:
 # ======= ROLES DB HELPERS =======
 
 async def get_user_roles(user_id: int) -> list[str]:
-    """
-    Возвращает список ролей пользователя из БД.
-    """
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+        async with db.execute("PRAGMA table_info(user_roles);") as cur:
+            cols = [r[1] for r in await cur.fetchall()]  # (cid, name, type, notnull, dflt, pk)
+
+        # какие имена колонок чаще всего встречаются
+        candidates = ["role", "role_name", "name", "title"]
+        role_col = next((c for c in candidates if c in cols), None)
+        if not role_col:
+            raise RuntimeError(f"user_roles has no role column. Found columns: {cols}")
+
         async with db.execute(
-            "SELECT role FROM user_roles WHERE user_id = ?",
+            f"SELECT {role_col} FROM user_roles WHERE user_id = ?",
             (int(user_id),),
         ) as cur:
             rows = await cur.fetchall()
 
-    raw = [r["role"] if isinstance(r, aiosqlite.Row) else r[0] for r in rows]
-    raw = [norm_role(x) or x for x in raw]   # если norm_role есть в проекте
+    raw = [r[0] for r in rows]
+    raw = [norm_role(x) or x for x in raw] if "norm_role" in globals() else raw
     return sorted(set(raw))
 
 async def add_user_role(user_id: int, role_code: str) -> None:
