@@ -418,7 +418,7 @@ ROLE_GRAPH: dict[str, list[str]] = {
     "officer_school": ["leadership"],
     "leadership": ["asst_squad_leader"],
     "asst_squad_leader": ["squad_leader"],
-    "squad_leader": ["asst_faction_leader", "to_infantry"],
+    "squad_leader": ["asst_faction_leader"],
     "asst_faction_leader": ["faction_leader"],
     "faction_leader": [],
 
@@ -437,7 +437,7 @@ ROLE_GRAPH: dict[str, list[str]] = {
     "squad_instr": ["to_tech", "squad_brigadier"],
     "to_tech": [],  # Перевод в тех — дальше обрабатываем логикой
     "squad_brigadier": [],
-    "squad_replace_root": [],  # "Командир отряда(Замена)" под рекрутом как конечный
+    "squad_replace_root": ["cmd_profile"],  # "Командир отряда(Замена)" под рекрутом как конечный
     "cmd_replace": ["cmd_profile"],
     "cmd_profile": ["cmd_instr"],
     "cmd_instr": ["leadership"],  # ЦМД Инструктор -> Руководящий состав
