@@ -717,18 +717,18 @@ def generate_role_tree_image(
     current_role = norm_role(current_role) or current_role
 
     # --- строим уровни дерева по ROLE_GRAPH ---
-# --- уровни дерева по TREE_LAYERS ---
-levels: dict[int, list[str]] = {}
-
-for depth, layer in enumerate(TREE_LAYERS):
-    visible = [
-        code for code in layer
-        if code in ROLE_TITLES
-    ]
-    if visible:
-        levels[depth] = visible
-
-ordered_depths = sorted(levels.keys())
+    # --- уровни дерева по TREE_LAYERS ---
+    levels: dict[int, list[str]] = {}
+    
+    for depth, layer in enumerate(TREE_LAYERS):
+        visible = [
+            code for code in layer
+            if code in ROLE_TITLES
+        ]
+        if visible:
+            levels[depth] = visible
+    
+    ordered_depths = sorted(levels.keys())
 
     # --- геометрия картинки ---
     block_w, block_h = 260, 110  # блок стал выше
