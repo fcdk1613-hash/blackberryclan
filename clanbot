@@ -980,15 +980,32 @@ def generate_role_tree_image(
 
     filename = f"career_{user_id}_{int(time.time())}.png"
     full_path = os.path.join(out_dir, filename)
-    # --- Telegram лимиты: ужимаем изображение, если слишком большое ---
-    MAX_SIDE = 9500  # безопасно меньше 10000
+    # --- TELEGRAM SAFE RESIZE ---
+    # Telegram sendPhoto может падать как по максимальной стороне, так и по общему числу пикселей.
+    MAX_SIDE = 4096
+    MAX_PIXELS = 20_000_000  # 20 мегапикселей
+
     w, h = img.size
-    max_side = max(w, h)
-    if max_side > MAX_SIDE:
-        scale = MAX_SIDE / max_side
-        new_w = max(1, int(w * scale))
-        new_h = max(1, int(h * scale))
+
+    def _scale_to(w: int, h: int, factor: float) -> tuple[int, int]:
+        nw = max(1, int(w * factor))
+        nh = max(1, int(h * factor))
+        return nw, nh
+
+    # уменьшаем, пока не влезет и по стороне, и по пикселям
+    while max(w, h) > MAX_SIDE or (w * h) > MAX_PIXELS:
+        factor_side = MAX_SIDE / max(w, h) if max(w, h) > MAX_SIDE else 1.0
+        factor_pixels = (MAX_PIXELS / (w * h)) ** 0.5 if (w * h) > MAX_PIXELS else 1.0
+        factor = min(factor_side, factor_pixels) * 0.95  # 5% запас
+        new_w, new_h = _scale_to(w, h, factor)
+        if (new_w, new_h) == (w, h):
+            break
         img = img.resize((new_w, new_h), Image.LANCZOS)
+        w, h = img.size
+
+    # на всякий случай: sendPhoto иногда лучше переваривает RGB
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
     img.save(full_path, "PNG")
 
     return full_path
