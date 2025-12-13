@@ -499,6 +499,39 @@ def get_role_title(code: str | None) -> str:
         return "—"
     return ROLE_TITLES.get(code, code)
 
+# ===== ВИЗУАЛЬНЫЙ ГРАФ КАРЬЕРЫ (ТОЛЬКО ДЛЯ КАРТИНКИ) =====
+CAREER_GRAPH: dict[str, list[str]] = {
+    "recruit": ["mech_nav", "medic_tube_root"],
+
+    # Мехводы
+    "mech_nav": ["mech_nav_school"],
+    "mech_nav_school": ["mech_nav_driver_gunner"],
+    "mech_nav_driver_gunner": ["crew_cmd_profile"],
+    "crew_cmd_profile": ["crew_cmd_instr"],
+
+    # Пехота
+    "medic_tube_root": ["medic_tube_school"],
+    "medic_tube_school": ["medic", "tube"],
+    "medic": ["squad_sergeant_cadet"],
+    "tube": ["squad_sergeant_cadet"],
+
+    # Командир отряда
+    "squad_sergeant_cadet": ["squad_profile"],
+    "squad_profile": ["squad_instr"],
+    "squad_instr": ["cmd_replace"],
+
+    # ЦМД
+    "cmd_replace": ["cmd_profile"],
+    "cmd_profile": ["cmd_instr"],
+    "cmd_instr": ["leadership"],
+
+    # Руководство
+    "leadership": ["asst_squad_leader"],
+    "asst_squad_leader": ["squad_leader"],
+    "squad_leader": ["asst_faction_leader"],
+    "asst_faction_leader": ["faction_leader"],
+}
+
 # ===== Логика веток и специальных переводов по ролям =====
 
 # Ветка Мехвод-наводчик
@@ -878,7 +911,7 @@ def generate_role_tree_image(
         x1, y1, x2, y2 = box
         return (x1, (y1 + y2) // 2)
 
-    for parent, children in ROLE_GRAPH.items():
+    for parent, children in CAREER_GRAPH.items():
         p = norm_role(parent) or parent
         if p not in positions:
             continue
