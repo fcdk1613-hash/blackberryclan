@@ -632,6 +632,70 @@ async def get_transfer_target(user_id: int, trigger_code: str) -> Optional[str]:
 
     return None
 
+# ===== ВИЗУАЛЬНЫЕ УРОВНИ ДЕРЕВА (ДЛЯ КАРТИНКИ) =====
+
+TREE_LAYERS: list[list[str]] = [
+    # 0 — старт
+    ["recruit"],
+
+    # 1 — базовые направления
+    ["mech_nav", "medic_tube_root"],
+
+    # 2 — обучение / классы
+    [
+        "mech_nav_school",
+        "medic_tube_school",
+        "light_specs",
+        "heavy_specs",
+        "sergeant_school_sl",
+    ],
+
+    # 3 — игровые роли
+    [
+        "mech_nav_driver_gunner",
+        "medic",
+        "tube",
+        "light_mg",
+        "light_gp",
+        "light_marksman",
+        "heavy_mg",
+        "heavy_sapper",
+        "heavy_tandem",
+        "heavy_sniper",
+    ],
+
+    # 4 — командиры отряда (все замены)
+    [
+        "squad_sergeant_cadet",
+        "heavy_squad_replace",
+        "squad_replace_root",
+        "cmd_replace",
+    ],
+
+    # 5 — профильные командиры
+    [
+        "squad_profile",
+        "cmd_profile",
+    ],
+
+    # 6 — инструкторы
+    [
+        "squad_instr",
+        "light_squad_instr",
+        "heavy_squad_instr",
+        "cmd_instr",
+    ],
+
+    # 7 — руководство
+    [
+        "leadership",
+        "asst_squad_leader",
+        "squad_leader",
+        "asst_faction_leader",
+        "faction_leader",
+    ],
+]
+
 def generate_role_tree_image(
     user_id: int,
     opened_roles: set[str] | list[str] | None,
@@ -653,41 +717,18 @@ def generate_role_tree_image(
     current_role = norm_role(current_role) or current_role
 
     # --- строим уровни дерева по ROLE_GRAPH ---
-    depths: dict[str, int] = {}
-    root = "recruit"
-    if root in ROLE_GRAPH:
-        q = deque([root])
-        depths[root] = 0
-        while q:
-            v = q.popleft()
-            d = depths[v]
-            for child in ROLE_GRAPH.get(v, []):
-                if child not in depths:
-                    depths[child] = d + 1
-                    q.append(child)
+# --- уровни дерева по TREE_LAYERS ---
+levels: dict[int, list[str]] = {}
 
-    # Подхватываем роли, которые есть в ROLE_TITLES, но не попали в BFS
-    # (кроме тех, которые не нужно показывать вообще)
-    max_depth = max(depths.values()) if depths else 0
-    for code in ROLE_TITLES.keys():
-        if code in HIDDEN_TREE_ROLES:
-            continue
-        if code not in depths:
-            max_depth += 1
-            depths[code] = max_depth
+for depth, layer in enumerate(TREE_LAYERS):
+    visible = [
+        code for code in layer
+        if code in ROLE_TITLES
+    ]
+    if visible:
+        levels[depth] = visible
 
-    # Группируем по уровням
-    levels: dict[int, list[str]] = {}
-    for code, d in depths.items():
-        levels.setdefault(d, []).append(code)
-
-    def role_sort_key(code: str) -> int:
-        return ROLE_INDEX.get(code, 9999)
-
-    for d in levels:
-        levels[d].sort(key=role_sort_key)
-
-    ordered_depths = sorted(levels.keys())
+ordered_depths = sorted(levels.keys())
     if not ordered_depths:
         # На всякий случай, чтобы не упасть
         ordered_depths = [0]
