@@ -665,6 +665,9 @@ def role_column(code: str) -> str:
         return "medic"
     return "medic"  # дефолт: пехота/общая ветка
 
+def build_row_index() -> dict[str, int]:
+    return {key: i for i, (_, key) in enumerate(TREE_COLUMNS)}
+
 def compute_longest_depth(root: str, graph: dict[str, list[str]]) -> dict[str, int]:
     """
     Глубина = максимум по всем родителям (longest path в DAG).
@@ -792,22 +795,30 @@ def generate_role_tree_image(
         for d in by_col[col]:
             by_col[col][d].sort(key=sort_key)
 
-    # --- геометрия картинки (КОЛОНКИ) ---
+    # --- геометрия (ЛАНДШАФТ): X = глубина, Y = колонка-направление ---
     block_w, block_h = 260, 110
-    col_gap = 120          # расстояние между колонками
-    row_gap = 60           # расстояние между "этажами" карьеры
-    sub_gap = 16           # если на одной глубине несколько блоков в колонке
+    x_gap = 140          # расстояние между "шагами" карьеры по X
+    y_gap = 90           # расстояние между направлениями по Y
+    sub_gap = 14         # расстояние между блоками внутри одной ячейки (если их несколько)
 
-    margin_x, margin_top, margin_bottom = 80, 140, 80
-    title_h = 80
+    margin_x, margin_top, margin_bottom = 80, 170, 90
 
     col_keys = [k for _, k in TREE_COLUMNS]
-    cols_count = len(col_keys)
+    row_index = build_row_index()
 
-    img_w = margin_x * 2 + cols_count * block_w + (cols_count - 1) * col_gap
+    # сколько "этажей-стопок" может быть в ячейке (колонка-направление, глубина)
+    max_stack = 1
+    for ck in col_keys:
+        for d, lst in by_col.get(ck, {}).items():
+            max_stack = max(max_stack, len(lst))
 
-    # высота: max_depth этажей + запас под "мульти-блоки" в одном этаже (примерно)
-    img_h = margin_top + margin_bottom + (max_depth + 1) * (block_h + row_gap) + 3 * (block_h + sub_gap)
+    # итоговые размеры
+    steps = max_depth + 1
+    rows = len(col_keys)
+
+    cell_h = max_stack * block_h + (max_stack - 1) * sub_gap
+    img_w = margin_x * 2 + steps * block_w + (steps - 1) * x_gap
+    img_h = margin_top + margin_bottom + rows * cell_h + (rows - 1) * y_gap
 
     img = Image.new("RGBA", (img_w, img_h), (10, 10, 20, 255))
     draw = ImageDraw.Draw(img)
@@ -828,62 +839,63 @@ def generate_role_tree_image(
     hw = hb[2] - hb[0]
     draw.text(((img_w - hw) // 2, 30), header, font=title_font, fill=(240, 240, 240))
 
-    # --- подписи колонок ---
-    for idx, (title, key) in enumerate(TREE_COLUMNS):
-        x1 = margin_x + idx * (block_w + col_gap)
-        xb = draw.textbbox((0, 0), title, font=col_font)
-        tw = xb[2] - xb[0]
-        draw.text((x1 + (block_w - tw) // 2, margin_top - 50), title, font=col_font, fill=(200, 200, 230))
+    # --- подписи направлений слева ---
+    for i, (title, key) in enumerate(TREE_COLUMNS):
+        y_top = margin_top + i * (cell_h + y_gap)
+        draw.text((20, y_top + 8), title, font=col_font, fill=(200, 200, 230))
 
-    # --- координаты блоков (по колонкам и глубине) ---
+    # --- координаты блоков ---
     positions: dict[str, tuple[int, int, int, int]] = {}
 
-    for col_idx, col_key in enumerate(col_keys):
-        col_x1 = margin_x + col_idx * (block_w + col_gap)
+    for key in col_keys:
+        r = row_index[key]
+        row_y = margin_top + r * (cell_h + y_gap)
 
-        depth_dict = by_col.get(col_key, {})
-        for d, roles_list in depth_dict.items():
-            base_y = margin_top + d * (block_h + row_gap)
+        depth_dict = by_col.get(key, {})
+        for d in range(steps):
+            roles_list = depth_dict.get(d, [])
+            if not roles_list:
+                continue
 
-            # если на одной глубине несколько блоков в колонке — стопкой вниз
+            x1 = margin_x + d * (block_w + x_gap)
+
+            # центрируем стопку в пределах cell_h
+            stack_h = len(roles_list) * block_h + (len(roles_list) - 1) * sub_gap
+            start_y = row_y + (cell_h - stack_h) // 2
+
             for j, code in enumerate(roles_list):
-                y1 = base_y + j * (block_h + sub_gap)
-                x1 = col_x1
-                x2 = x1 + block_w
-                y2 = y1 + block_h
-                positions[code] = (x1, y1, x2, y2)
+                y1 = start_y + j * (block_h + sub_gap)
+                positions[code] = (x1, y1, x1 + block_w, y1 + block_h)
 
-    # --- связи между блоками (ломаные линии) ---
+    # --- связи (ломаные, слева-направо) ---
     line_color = (90, 90, 140, 255)
 
-    def bottom_center(box):
+    def right_center(box):
         x1, y1, x2, y2 = box
-        return ( (x1 + x2) // 2, y2 )
+        return (x2, (y1 + y2) // 2)
 
-    def top_center(box):
+    def left_center(box):
         x1, y1, x2, y2 = box
-        return ( (x1 + x2) // 2, y1 )
+        return (x1, (y1 + y2) // 2)
 
     for parent, children in ROLE_GRAPH.items():
         p = norm_role(parent) or parent
         if p not in positions:
             continue
 
-        pbcx, pbcy = bottom_center(positions[p])
+        px, py = right_center(positions[p])
 
         for child in children:
             c = norm_role(child) or child
             if c not in positions:
                 continue
 
-            tcx, tcy = top_center(positions[c])
+            cx, cy = left_center(positions[c])
+            mid_x = (px + cx) // 2
 
-            # делаем “колено” посередине по Y, чтобы линия была читаемой
-            mid_y = (pbcy + tcy) // 2
-
-            draw.line((pbcx, pbcy, pbcx, mid_y), fill=line_color, width=3)
-            draw.line((pbcx, mid_y, tcx, mid_y), fill=line_color, width=3)
-            draw.line((tcx, mid_y, tcx, tcy), fill=line_color, width=3)
+            draw.line((px, py, mid_x, py), fill=line_color, width=3)
+            draw.line((mid_x, py, mid_x, cy), fill=line_color, width=3)
+            draw.line((mid_x, cy, cx, cy), fill=line_color, width=3)
 
     # --- сами блоки ---
     for code, (x1, y1, x2, y2) in positions.items():
