@@ -499,6 +499,56 @@ def get_role_title(code: str | None) -> str:
         return "—"
     return ROLE_TITLES.get(code, code)
 
+def build_visual_edges(
+    graph: dict[str, list[str]],
+    hidden: set[str],
+) -> set[tuple[str, str]]:
+    """
+    Берём ROLE_GRAPH и схлопываем скрытые узлы:
+    parent -> (hidden...) -> visible_child  превращаем в parent -> visible_child.
+
+    Возвращает набор рёбер (u, v) между ВИДИМЫМИ узлами (уже с norm_role).
+    """
+    from collections import defaultdict, deque
+
+    # нормализуем граф + уникализируем
+    g: dict[str, list[str]] = defaultdict(list)
+    for p, children in graph.items():
+        p2 = norm_role(p) or p
+        for c in children:
+            c2 = norm_role(c) or c
+            if c2 not in g[p2]:
+                g[p2].append(c2)
+
+    hidden2 = {norm_role(x) or x for x in hidden}
+
+    edges: set[tuple[str, str]] = set()
+
+    # для каждого видимого родителя идём по его детям,
+    # пропуская скрытые промежуточные узлы
+    for p in g.keys():
+        if p in hidden2:
+            continue
+
+        for c in g.get(p, []):
+            # BFS/DFS через скрытые узлы до первых видимых
+            q = deque([c])
+            seen = set()
+            while q:
+                x = q.popleft()
+                if x in seen:
+                    continue
+                seen.add(x)
+
+                if x in hidden2:
+                    for nxt in g.get(x, []):
+                        q.append(nxt)
+                else:
+                    if x != p:
+                        edges.add((p, x))
+
+    return edges
+
 # ===== ВИЗУАЛЬНЫЙ ГРАФ КАРЬЕРЫ (ТОЛЬКО ДЛЯ КАРТИНКИ) =====
 CAREER_GRAPH: dict[str, list[str]] = {
     "recruit": ["mech_nav", "medic_tube_root"],
@@ -900,7 +950,9 @@ def generate_role_tree_image(
                 y1 = start_y + j * (block_h + sub_gap)
                 positions[code] = (x1, y1, x1 + block_w, y1 + block_h)
 
-    # --- связи (ломаные, слева-направо) ---
+    # --- связи между блоками (по ROLE_GRAPH, но схлопываем скрытые узлы) ---
+    visual_edges = build_visual_edges(ROLE_GRAPH, HIDDEN_TREE_ROLES)
+
     line_color = (90, 90, 140, 255)
 
     def right_center(box):
@@ -911,24 +963,17 @@ def generate_role_tree_image(
         x1, y1, x2, y2 = box
         return (x1, (y1 + y2) // 2)
 
-    for parent, children in CAREER_GRAPH.items():
-        p = norm_role(parent) or parent
-        if p not in positions:
+    for p, c in visual_edges:
+        if p not in positions or c not in positions:
             continue
 
         px, py = right_center(positions[p])
+        cx, cy = left_center(positions[c])
+        mid_x = (px + cx) // 2
 
-        for child in children:
-            c = norm_role(child) or child
-            if c not in positions:
-                continue
-
-            cx, cy = left_center(positions[c])
-            mid_x = (px + cx) // 2
-
-            draw.line((px, py, mid_x, py), fill=line_color, width=3)
-            draw.line((mid_x, py, mid_x, cy), fill=line_color, width=3)
-            draw.line((mid_x, cy, cx, cy), fill=line_color, width=3)
+        draw.line((px, py, mid_x, py), fill=line_color, width=3)
+        draw.line((mid_x, py, mid_x, cy), fill=line_color, width=3)
+        draw.line((mid_x, cy, cx, cy), fill=line_color, width=3)
 
     # --- сами блоки ---
     for code, (x1, y1, x2, y2) in positions.items():
