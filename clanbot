@@ -730,6 +730,32 @@ def generate_role_tree_image(
     
     ordered_depths = sorted(levels.keys())
 
+    HIDDEN_TREE_ROLES = {"squad_instr_sl", "squad_profile_sl_2"}  # если у тебя уже есть - оставь один вариант
+
+    # какие роли уже перечислены в TREE_LAYERS
+    used_in_layers: set[str] = set()
+    for layer in TREE_LAYERS:
+        used_in_layers.update(layer)
+
+    # что вообще существует в схеме
+    all_codes: set[str] = set(ROLE_TITLES.keys())
+
+    # пропущенные роли (которые существуют, но не перечислены в слоях)
+    missing = [
+        c for c in all_codes
+        if c not in used_in_layers and c not in HIDDEN_TREE_ROLES
+    ]
+
+    # сортируем “хвост” по ROLE_ORDER (если роль не в индексе — в конец)
+    missing.sort(key=lambda c: ROLE_INDEX.get(c, 9999))
+
+    if missing:
+        # добавляем их отдельным последним уровнем ("прочее")
+        next_depth = (max(levels.keys()) + 1) if levels else 0
+        levels[next_depth] = missing
+
+    ordered_depths = sorted(levels.keys())
+
     # --- геометрия картинки ---
     block_w, block_h = 260, 110  # блок стал выше
     h_spacing = 40
