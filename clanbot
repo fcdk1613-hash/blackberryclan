@@ -729,10 +729,6 @@ for depth, layer in enumerate(TREE_LAYERS):
         levels[depth] = visible
 
 ordered_depths = sorted(levels.keys())
-    if not ordered_depths:
-        # На всякий случай, чтобы не упасть
-        ordered_depths = [0]
-        levels[0] = ["recruit"]
 
     # --- геометрия картинки ---
     block_w, block_h = 260, 110  # блок стал выше
