@@ -4598,11 +4598,23 @@ import re as _re
 _BB_TAG_RE = _re.compile(r"^\s*\[BB\]\s*", _re.IGNORECASE)
 
 def normalize_server_nick(name: str) -> str:
-    # "[BB] Nick" -> "Nick"
+    # Пример строки: "[BB] forester | team id: 1 | squad id: ..."
+    # или: "forester | team id: 1 | squad id: ..."
     if not name:
         return ""
+
     name = name.strip()
+
+    # если в строке есть поля через "|", оставляем только первое (сам ник)
+    if "|" in name:
+        name = name.split("|", 1)[0].strip()
+
+    # убрать префикс клана
     name = _BB_TAG_RE.sub("", name).strip()
+
+    # на всякий случай убрать кавычки
+    name = name.strip('"').strip("'").strip()
+
     return name
 
 def normalize_bot_nick(name: str) -> str:
@@ -4789,7 +4801,7 @@ async def get_online_bb_nicks() -> set[str]:
             continue
         nick = normalize_server_nick(full)
         if nick:
-            online.add(nick.lower())
+            online.add(nick.casefold())
     return online
 
 _ONLINE_CACHE: set[str] | None = None
@@ -5420,7 +5432,7 @@ async def on_train_online(call: CallbackQuery):
     for _uid, nick in answered_rows:
         bn = normalize_bot_nick(nick or "")
         if bn:
-            answered_set.add(bn.lower())
+            answered_set.add(bn.casefold())
 
     yes_not_online = []
     for _uid, nick, link in yes_rows:
