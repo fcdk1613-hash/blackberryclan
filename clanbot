@@ -632,6 +632,87 @@ async def get_transfer_target(user_id: int, trigger_code: str) -> Optional[str]:
 
     return None
 
+# ======= ВИЗУАЛЬНАЯ РАСКЛАДКА ДЛЯ КАРТИНКИ КАРЬЕРЫ =======
+
+TREE_COLUMNS = [
+    ("Мехводы", "mech"),
+    ("Пехота", "medic"),
+    ("Лёгкие спецы", "light"),
+    ("Тяжёлые спецы", "heavy"),
+    ("Командование", "lead"),
+]
+
+def role_column(code: str) -> str:
+    """
+    Возвращает ключ колонки для роли.
+    Приоритет важен: руководство/ЦМД должно уходить в 'lead', даже если роль встречается в других множествах.
+    """
+    c = norm_role(code) or code
+
+    # Явно в командование (важно для читабельности)
+    if c in {"leadership", "officer_school", "asst_squad_leader", "squad_leader", "asst_faction_leader", "faction_leader",
+             "cmd_replace", "cmd_profile", "cmd_instr",
+             "squad_profile", "light_squad_instr", "heavy_squad_instr", "squad_instr"}:
+        return "lead"
+
+    if c in MECH_BRANCH:
+        return "mech"
+    if c in HEAVY_BRANCH:
+        return "heavy"
+    if c in LIGHT_BRANCH:
+        return "light"
+    if c in MEDIC_BRANCH:
+        return "medic"
+    return "medic"  # дефолт: пехота/общая ветка
+
+def compute_longest_depth(root: str, graph: dict[str, list[str]]) -> dict[str, int]:
+    """
+    Глубина = максимум по всем родителям (longest path в DAG).
+    Это фиксит случаи, где у роли несколько родителей: ребёнок всегда ниже всех родителей.
+    """
+    from collections import defaultdict, deque
+
+    # собираем входящие степени и родителей
+    indeg = defaultdict(int)
+    parents = defaultdict(list)
+    nodes = set(graph.keys())
+    for p, chs in graph.items():
+        nodes.add(p)
+        for ch in chs:
+            nodes.add(ch)
+            indeg[ch] += 1
+            parents[ch].append(p)
+    for n in nodes:
+        indeg.setdefault(n, 0)
+
+    depth = {n: -10**9 for n in nodes}
+    depth[root] = 0
+
+    q = deque([n for n in nodes if indeg[n] == 0])
+    # гарантируем, что root тоже будет обработан
+    if root not in q:
+        q.appendleft(root)
+
+    while q:
+        v = q.popleft()
+
+        # релаксация детей от v
+        for ch in graph.get(v, []):
+            # depth[ch] должен быть >= depth[v] + 1
+            if depth[v] > -10**8:
+                depth[ch] = max(depth[ch], depth[v] + 1)
+
+            indeg[ch] -= 1
+            if indeg[ch] == 0:
+                q.append(ch)
+
+    # если что-то осталось недостижимым, прижимаем к 0.. и не ломаемся
+    for n in nodes:
+        if depth[n] < 0 and n != root:
+            depth[n] = 0
+
+    return depth
+
 def generate_role_tree_image(
     user_id: int,
     opened_roles: set[str] | list[str] | None,
@@ -652,57 +733,55 @@ def generate_role_tree_image(
     opened_set: set[str] = {norm_role(x) or x for x in (opened_roles or [])}
     current_role = norm_role(current_role) or current_role
 
-    # --- строим уровни дерева по ROLE_GRAPH ---
-    depths: dict[str, int] = {}
+    # --- строим "правильную" глубину (longest-path), чтобы порядок родителей/детей был корректным ---
     root = "recruit"
-    if root in ROLE_GRAPH:
-        q = deque([root])
-        depths[root] = 0
-        while q:
-            v = q.popleft()
-            d = depths[v]
-            for child in ROLE_GRAPH.get(v, []):
-                if child not in depths:
-                    depths[child] = d + 1
-                    q.append(child)
+    depth_map = compute_longest_depth(root, ROLE_GRAPH)
 
-    # Подхватываем роли, которые есть в ROLE_TITLES, но не попали в BFS
-    # (кроме тех, которые не нужно показывать вообще)
-    max_depth = max(depths.values()) if depths else 0
-    for code in ROLE_TITLES.keys():
-        if code in HIDDEN_TREE_ROLES:
-            continue
-        if code not in depths:
-            max_depth += 1
-            depths[code] = max_depth
+    # роли, которые не показываем
+    HIDDEN_TREE_ROLES = {"squad_instr_sl", "squad_profile_sl_2"}
 
-    # Группируем по уровням
-    levels: dict[int, list[str]] = {}
-    for code, d in depths.items():
-        levels.setdefault(d, []).append(code)
+    # список всех видимых ролей
+    visible_roles = [
+        c for c in ROLE_TITLES.keys()
+        if c not in HIDDEN_TREE_ROLES
+    ]
 
-    def role_sort_key(code: str) -> int:
+    # группировка по колонкам и глубине
+    # col -> depth -> [roles]
+    by_col: dict[str, dict[int, list[str]]] = {}
+    max_depth = 0
+
+    def sort_key(code: str) -> int:
         return ROLE_INDEX.get(code, 9999)
 
-    for d in levels:
-        levels[d].sort(key=role_sort_key)
+    for code in visible_roles:
+        c = norm_role(code) or code
+        col = role_column(c)
+        d = int(depth_map.get(c, 0))
+        max_depth = max(max_depth, d)
+        by_col.setdefault(col, {}).setdefault(d, []).append(c)
 
-    ordered_depths = sorted(levels.keys())
-    if not ordered_depths:
-        # На всякий случай, чтобы не упасть
-        ordered_depths = [0]
-        levels[0] = ["recruit"]
+    # сортируем внутри каждой клетки
+    for col in by_col:
+        for d in by_col[col]:
+            by_col[col][d].sort(key=sort_key)
 
-    # --- геометрия картинки ---
-    block_w, block_h = 260, 110  # блок стал выше
-    h_spacing = 40
-    v_spacing = 120
-    margin_x, margin_top, margin_bottom = 60, 120, 80
+    # --- геометрия картинки (КОЛОНКИ) ---
+    block_w, block_h = 260, 110
+    col_gap = 120          # расстояние между колонками
+    row_gap = 60           # расстояние между "этажами" карьеры
+    sub_gap = 16           # если на одной глубине несколько блоков в колонке
 
-    max_per_level = max(len(levels[d]) for d in ordered_depths)
-    img_w = margin_x * 2 + max_per_level * block_w + (max_per_level - 1) * h_spacing
-    levels_count = len(ordered_depths)
-    img_h = margin_top + margin_bottom + levels_count * block_h + (levels_count - 1) * v_spacing
+    margin_x, margin_top, margin_bottom = 80, 140, 80
+    title_h = 80
+
+    col_keys = [k for _, k in TREE_COLUMNS]
+    cols_count = len(col_keys)
+
+    img_w = margin_x * 2 + cols_count * block_w + (cols_count - 1) * col_gap
+
+    # высота: max_depth этажей + запас под "мульти-блоки" в одном этаже (примерно)
+    img_h = margin_top + margin_bottom + (max_depth + 1) * (block_h + row_gap) + 3 * (block_h + sub_gap)
 
     img = Image.new("RGBA", (img_w, img_h), (10, 10, 20, 255))
     draw = ImageDraw.Draw(img)
@@ -711,34 +790,9 @@ def generate_role_tree_image(
     try:
         title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
         node_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+        col_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
     except Exception:
-        title_font = node_font = ImageFont.load_default()
-
-    def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
-        """
-        Разбивает текст на несколько строк так, чтобы каждая помещалась в max_width.
-        """
-        words = text.split()
-        if not words:
-            return [""]
-
-        lines: list[str] = []
-        current = ""
-
-        for w in words:
-            test = (current + " " + w).strip()
-            bbox = draw.textbbox((0, 0), test, font=font)
-            width = bbox[2] - bbox[0]
-            if width <= max_width or not current:
-                current = test
-            else:
-                lines.append(current)
-                current = w
-
-        if current:
-            lines.append(current)
-
-        return lines
+        title_font = node_font = col_font = ImageFont.load_default()
 
     # --- заголовок ---
     header = "Дерево ролей"
@@ -748,36 +802,62 @@ def generate_role_tree_image(
     hw = hb[2] - hb[0]
     draw.text(((img_w - hw) // 2, 30), header, font=title_font, fill=(240, 240, 240))
 
-    # --- координаты блоков ---
+    # --- подписи колонок ---
+    for idx, (title, key) in enumerate(TREE_COLUMNS):
+        x1 = margin_x + idx * (block_w + col_gap)
+        xb = draw.textbbox((0, 0), title, font=col_font)
+        tw = xb[2] - xb[0]
+        draw.text((x1 + (block_w - tw) // 2, margin_top - 50), title, font=col_font, fill=(200, 200, 230))
+
+    # --- координаты блоков (по колонкам и глубине) ---
     positions: dict[str, tuple[int, int, int, int]] = {}
-    for level_index, depth in enumerate(ordered_depths):
-        roles_at_level = levels[depth]
-        count = len(roles_at_level)
-        total_width = count * block_w + (count - 1) * h_spacing
-        start_x = (img_w - total_width) // 2
-        y1 = margin_top + level_index * (block_h + v_spacing)
 
-        for i, code in enumerate(roles_at_level):
-            x1 = start_x + i * (block_w + h_spacing)
-            x2 = x1 + block_w
-            y2 = y1 + block_h
-            positions[code] = (x1, y1, x2, y2)
+    for col_idx, col_key in enumerate(col_keys):
+        col_x1 = margin_x + col_idx * (block_w + col_gap)
 
-    # --- связи между блоками ---
+        depth_dict = by_col.get(col_key, {})
+        for d, roles_list in depth_dict.items():
+            base_y = margin_top + d * (block_h + row_gap)
+
+            # если на одной глубине несколько блоков в колонке — стопкой вниз
+            for j, code in enumerate(roles_list):
+                y1 = base_y + j * (block_h + sub_gap)
+                x1 = col_x1
+                x2 = x1 + block_w
+                y2 = y1 + block_h
+                positions[code] = (x1, y1, x2, y2)
+
+    # --- связи между блоками (ломаные линии) ---
     line_color = (90, 90, 140, 255)
+
+    def bottom_center(box):
+        x1, y1, x2, y2 = box
+        return ( (x1 + x2) // 2, y2 )
+
+    def top_center(box):
+        x1, y1, x2, y2 = box
+        return ( (x1 + x2) // 2, y1 )
+
     for parent, children in ROLE_GRAPH.items():
-        if parent not in positions:
+        p = norm_role(parent) or parent
+        if p not in positions:
             continue
-        px1, py1, px2, py2 = positions[parent]
-        pcx = (px1 + px2) // 2
-        pcy = py2
+
+        pbcx, pbcy = bottom_center(positions[p])
+
         for child in children:
-            if child not in positions:
+            c = norm_role(child) or child
+            if c not in positions:
                 continue
-            cx1, cy1, cx2, cy2 = positions[child]
-            ccx = (cx1 + cx2) // 2
-            ccy = cy1
-            draw.line((pcx, pcy, ccx, ccy), fill=line_color, width=3)
+
+            tcx, tcy = top_center(positions[c])
+
+            # делаем “колено” посередине по Y, чтобы линия была читаемой
+            mid_y = (pbcy + tcy) // 2
+
+            draw.line((pbcx, pbcy, pbcx, mid_y), fill=line_color, width=3)
+            draw.line((pbcx, mid_y, tcx, mid_y), fill=line_color, width=3)
+            draw.line((tcx, mid_y, tcx, tcy), fill=line_color, width=3)
 
     # --- сами блоки ---
     for code, (x1, y1, x2, y2) in positions.items():
