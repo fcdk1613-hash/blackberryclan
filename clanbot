@@ -713,6 +713,32 @@ def compute_longest_depth(root: str, graph: dict[str, list[str]]) -> dict[str, i
 
     return depth
 
+def wrap_text(draw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    """
+    Разбивает текст на строки, чтобы он влезал в max_width.
+    """
+    words = text.split()
+    if not words:
+        return [""]
+
+    lines: list[str] = []
+    current = ""
+
+    for w in words:
+        test = (current + " " + w).strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        width = bbox[2] - bbox[0]
+        if width <= max_width or not current:
+            current = test
+        else:
+            lines.append(current)
+            current = w
+
+    if current:
+        lines.append(current)
+
+    return lines
+
 def generate_role_tree_image(
     user_id: int,
     opened_roles: set[str] | list[str] | None,
@@ -881,7 +907,7 @@ def generate_role_tree_image(
         title = get_role_title(code)
 
         # переносим текст по строкам, если он не влезает по ширине
-        lines = wrap_text(title, node_font, block_w - 20)
+        lines = wrap_text(draw, title, node_font, block_w - 20)
 
         # высота одной строки
         if lines:
