@@ -1789,6 +1789,20 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.row()
     kb.button(text="⬅️ Назад к профилю", callback_data=f"profile_back:{user_id}")
     return kb.adjust(1).as_markup()
+
+
+def levels_kb(callback_prefix: str, *, back_cb: str | None = None) -> InlineKeyboardMarkup:
+    """Клавиатура выбора уровня 1..6. callback_data будет вида f"{callback_prefix}:{lvl}"."""
+    kb = InlineKeyboardBuilder()
+    for lvl in range(1, 7):
+        kb.button(text=str(lvl), callback_data=f"{callback_prefix}:{lvl}")
+    kb.adjust(3, 3)
+    if back_cb:
+        kb.row()
+        kb.button(text="⬅️ Назад", callback_data=back_cb)
+        kb.adjust(3, 3, 1)
+    return kb.as_markup()
+
 def pad_clan_id(v: Optional[int]) -> str:
     if not v:
         return "—"
@@ -3807,6 +3821,32 @@ async def on_edit_init(call: CallbackQuery, state: FSMContext):
         pass
     await call.answer()
 
+
+@dp.callback_query(F.data.startswith("edit:setlevel:"))
+async def on_edit_setlevel(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    try:
+        _, _, uid_str, lvl_str = call.data.split(":")
+        target_id = int(uid_str)
+        lvl = int(lvl_str)
+        if lvl < 1 or lvl > 6:
+            raise ValueError
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    await update_user(target_id, {"level": lvl})
+    user = await get_user(target_id)
+    text = format_profile(user, title="Редактирование профиля")
+    await call.message.edit_text(
+        text + f"\n\n✅ Уровень обновлён: <b>{lvl}</b>\nВыберите поле для редактирования:",
+        reply_markup=edit_menu_kb(target_id),
+    )
+    await call.answer()
+
+
 @dp.callback_query(F.data.startswith("edit:rank:"))
 async def on_edit_rank(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -4030,6 +4070,20 @@ async def on_edit_field(call: CallbackQuery, state: FSMContext):
     if field not in allowed:
         await call.answer("Недопустимое поле.", show_alert=True)
         return
+
+    # Уровень выбираем кнопками (без ввода текста)
+    if field == "level":
+        try:
+            user = await get_user(target_id)
+        except Exception:
+            user = None
+        cur = int((user.get("level") if user else None) or 1)
+        text = format_profile(user, title="Редактирование профиля") if user else "Редактирование профиля"
+        text += f"\n\nТекущий уровень: <b>{cur}</b>\nВыберите новый уровень (1-6):"
+        await call.message.edit_text(text, reply_markup=levels_kb(f"edit:setlevel:{target_id}", back_cb=f"edit:init:{target_id}"))
+        await call.answer()
+        return
+
     prompts = {
         "nickname": "Введите новый ник (реальное имя):",
         "discord": "Введите новый Discord:",
@@ -6542,8 +6596,23 @@ async def CW_create_team(message: Message, state: FSMContext):
     except Exception:
         await message.answer("Введите положительное число."); return
     await state.update_data(team_size=team)
-    await message.answer("Уровень допуска на КВ (1-6):")
+    await message.answer("Уровень допуска на КВ (1-6):", reply_markup=levels_kb("cw:create:access"))
     await state.set_state(CWCreateState.access_level)
+
+@dp.callback_query(CWCreateState.access_level, F.data.startswith("cw:create:access:"))
+async def CW_create_access_level_cb(call: CallbackQuery, state: FSMContext):
+    try:
+        lvl = int(call.data.split(":")[-1])
+        if lvl < 1 or lvl > 6:
+            raise ValueError
+    except Exception:
+        await call.answer("Некорректный уровень.", show_alert=True)
+        return
+    await state.update_data(access_level=lvl)
+    await call.message.edit_text(f"Уровень допуска: <b>{lvl}</b>\n\nПравила:")
+    await state.set_state(CWCreateState.rules)
+    await call.answer()
+
 
 @dp.message(CWCreateState.rules)
 async def CW_create_rules(message: Message, state: FSMContext):
@@ -6676,6 +6745,57 @@ async def CW_admin_panel(call: CallbackQuery):
     await call.answer()
 
 
+
+@dp.callback_query(F.data.startswith("cw:setaccess:"))
+async def CW_admin_set_access_level(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    try:
+        _, _, war_id_s, lvl_s = call.data.split(":")
+        war_id = int(war_id_s)
+        lvl = int(lvl_s)
+        if lvl < 1 or lvl > 6:
+            raise ValueError
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    # UPDATE access_level
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE cw_wars SET access_level=? WHERE id=?", (lvl, war_id))
+        await db.commit()
+
+    w = await CW_get_war(war_id)
+    # Вернёмся в админ-панель КВ
+    regs = await CW_registrations(war_id)
+    names = []
+    for uid in regs:
+        u = await get_user(uid)
+        names.append(display_name(u, fallback_fullname=True))
+    text = (
+        f"🛠 <b>КВ админ</b> (ID: {war_id})\n"
+        f"Противник: {w.get('opponents')}\n"
+        f"Время: {fmt_dt(w.get('starts_at'))}\n"
+        f"Карта: {w.get('map')}\n"
+        f"Размер: {w.get('team_size')}\n"
+        f"Уровень допуска: {int(w.get('access_level') or 6)}\n"
+        f"Сервер: {w.get('server') or '-'}\n"
+        f"Статус: {w.get('status')}\n\n"
+        f"Заявки ({len(names)}):\n" + ("\n".join(f"• {n}" for n in names) if names else "—")
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Открыть", callback_data=f"cw:open:{war_id}")
+    kb.button(text="⛔ Закрыть", callback_data=f"cw:close:{war_id}")
+    kb.button(text="🗑 Удалить", callback_data=f"cw:delete:{war_id}")
+    kb.row()
+    kb.button(text="✏️ Редактировать КВ", callback_data=f"cw:edit:{war_id}")
+    kb.row()
+    kb.button(text="⬅️ Назад", callback_data="cw_admin")
+    await call.message.edit_text(text, reply_markup=kb.adjust(2).as_markup())
+    await call.answer("✅ Уровень допуска обновлён")
+
+
 class CWEditState(StatesGroup):
     waiting_value = State()
 
@@ -6702,6 +6822,17 @@ async def CW_admin_edit_menu(call: CallbackQuery, state: FSMContext):
     if not w:
         await call.answer("КВ не найдено.", show_alert=True)
         return
+
+    if field == "access_level":
+        cur = int(w.get("access_level") or 6)
+        await call.message.edit_text(
+            f"🎚 <b>Уровень допуска</b> для КВ #{war_id}\n"
+            f"Текущий: <b>{cur}</b>\n\nВыберите новый уровень (1-6):",
+            reply_markup=levels_kb(f"cw:setaccess:{war_id}", back_cb=f"cw:edit:{war_id}")
+        )
+        await call.answer()
+        return
+
     await state.clear()
     await call.message.answer(
         f"✏️ <b>Редактирование КВ #{war_id}</b>\n"
