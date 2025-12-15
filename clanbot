@@ -1047,7 +1047,7 @@ def generate_role_tree_image(
             draw.text((tx, ty), line, font=node_font, fill=(250, 250, 250, 255))
 
     # Легенда внизу
-    legend_y = img_h - margin_bottom + 10
+    legend_y = total_h - margin_bottom + 10
     legend_x = margin_x
 
     box_w, box_h = 36, 20
