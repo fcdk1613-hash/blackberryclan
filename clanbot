@@ -1048,7 +1048,7 @@ def generate_role_tree_image(
 
     # Легенда внизу
     legend_y = total_h - margin_bottom + 10
-    legend_x = margin_x
+    legend_x = margin_left
 
     box_w, box_h = 36, 20
 
