@@ -3914,8 +3914,9 @@ async def on_role_set(call: CallbackQuery):
         await call.answer("Недостаточно прав.", show_alert=True)
         return
 
-    try:
-        _, _, 
+    # TODO: тут была незавершённая логика. Заглушка, чтобы файл запускался.
+    await call.answer("В разработке.", show_alert=True)
+    return
 
 # ======= Быстрые текстовые команды для админов/модераторов (в ЛС ботe) =======
 # Примеры:
