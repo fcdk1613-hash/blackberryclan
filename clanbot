@@ -3553,14 +3553,16 @@ async def cmd_player(message: Message, command: Command):
     if not target_user and query.startswith("@"):
         target_user = await get_user_by_username(query)
     if not target_user:
-        matches = await search_users_by_nickname(query, limit=10)
-        if len(matches) == 1:
+        u, matches = await resolve_user_query(query)
+        if u:
+            target_user = u
+        elif len(matches) == 1:
             target_user = matches[0]
         elif len(matches) > 1:
             lines = ["Найдено несколько пользователей:"]
-            for u in matches:
-                lines.append(f"• {u.get('nickname') or '-'} — ClanID: {pad_clan_id(u.get('clan_id'))} — ID: <code>{u['user_id']}</code> — фракция: {u.get('faction') or '-'}")
-            lines.append("\nУточните: /player <ID>")
+            for u2 in matches[:10]:
+                lines.append(f"• {u2.get('nickname') or '-'} — ClanID: {pad_clan_id(u2.get('clan_id'))} — ID: <code>{u2['user_id']}</code> — фракция: {u2.get('faction') or '-'}")
+            lines.append("\nУточните: /player <ID> или используйте ClanID (#0123) / @username")
             await message.answer("\n".join(lines))
             return
 
@@ -3913,7 +3915,289 @@ async def on_role_set(call: CallbackQuery):
         return
 
     try:
-        _, _, uid_str, role_code = call.data.split(":")
+        _, _, 
+
+# ======= Быстрые текстовые команды для админов/модераторов (в ЛС ботe) =======
+# Примеры:
+#   FORESTER уровень 3
+#   "Nick With Space" фракция Штаб
+#   @username elo +10
+#   #0123 статус joined
+#   403704696 дискорд MyName#1234
+# Поддерживаемые поля: уровень, фракция, ник, дискорд, стим, др, возраст, тг, таймзона, телефон, clanid, статус, elo
+
+_QUICK_EDIT_FIELD_ALIASES = {
+    # key -> canonical field for apply_quick_edit (поддерживаются и multi-word ключи)
+    # --- базовые поля профиля ---
+    "уровень": "level",
+    "level": "level",
+    "lvl": "level",
+
+    "фракция": "faction",
+    "faction": "faction",
+    "основа": "faction",
+    "резерв": "faction",
+    "штаб": "faction",
+
+    "ник": "nickname",
+    "имя": "nickname",
+    "nickname": "nickname",
+    "name": "nickname",
+
+    "дискорд": "discord",
+    "discord": "discord",
+
+    "стим": "steamid",
+    "steam": "steamid",
+    "steamid": "steamid",
+
+    "др": "birth_date",
+    "датарождения": "birth_date",
+    "дата рождения": "birth_date",
+    "birth": "birth_date",
+    "birthdate": "birth_date",
+    "birth_date": "birth_date",
+
+    "возраст": "age",
+    "age": "age",
+
+    "тг": "tg_link",
+    "телеграм": "tg_link",
+    "telegram": "tg_link",
+    "tg": "tg_link",
+    "tg_link": "tg_link",
+
+    "таймзона": "timezone",
+    "timezone": "timezone",
+
+    "телефон": "phone",
+    "номер": "phone",
+    "phone": "phone",
+
+    "clanid": "clan_id",
+    "кланид": "clan_id",
+    "clan_id": "clan_id",
+    "cid": "clan_id",
+
+    "статус": "status",
+    "status": "status",
+
+    # --- ELO / CW ---
+    "elo": "elo_rating",
+    "рейтинг": "elo_rating",
+    "elo_rating": "elo_rating",
+
+    "ранг": "elo_rank",
+    "elo_rank": "elo_rank",
+    "rank": "elo_rank",
+
+    "cw wins": "cw_wins",
+    "cw победы": "cw_wins",
+    "победы cw": "cw_wins",
+    "cw_wins": "cw_wins",
+
+    "cw losses": "cw_losses",
+    "cw поражения": "cw_losses",
+    "поражения cw": "cw_losses",
+    "cw_losses": "cw_losses",
+
+    "cw kills": "cw_kills",
+    "cw киллы": "cw_kills",
+    "cw убийства": "cw_kills",
+    "киллы cw": "cw_kills",
+    "убийства cw": "cw_kills",
+    "cw_kills": "cw_kills",
+
+    "cw deaths": "cw_deaths",
+    "cw смерти": "cw_deaths",
+    "смерти cw": "cw_deaths",
+    "cw_deaths": "cw_deaths",
+
+    "cw revives": "cw_revives",
+    "cw ревайвы": "cw_revives",
+    "cw подъемы": "cw_revives",
+    "ревайвы cw": "cw_revives",
+    "подъемы cw": "cw_revives",
+    "cw_revives": "cw_revives",
+
+    "cw capture": "cw_capture_points",
+    "cw кап": "cw_capture_points",
+    "cw захват": "cw_capture_points",
+    "кап cw": "cw_capture_points",
+    "захват cw": "cw_capture_points",
+    "cw_capture_points": "cw_capture_points",
+
+    "cw mvp": "cw_mvp_count",
+    "cw мвп": "cw_mvp_count",
+    "мвп cw": "cw_mvp_count",
+    "cw_mvp_count": "cw_mvp_count",
+
+    "cw mvp list": "cw_mvp_list",
+    "cw мвп лист": "cw_mvp_list",
+    "cw список мвп": "cw_mvp_list",
+    "cw_mvp_list": "cw_mvp_list",
+
+    # --- таймстемпы (редактирование допускаем, но обычно не нужно) ---
+    "created_at": "created_at",
+    "applied_at": "applied_at",
+    "approved_at": "approved_at",
+    "joined_at": "joined_at",
+}
+
+def _canon_field(word: str) -> Optional[str]:
+    # Нормализуем алиас поля (регистр, ё->е, лишние пробелы)
+    w = (word or "").strip().lower().replace("ё", "е")
+    w = re.sub(r"\s+", " ", w).strip()
+    # точное совпадение
+    if w in _QUICK_EDIT_FIELD_ALIASES:
+        return _QUICK_EDIT_FIELD_ALIASES[w]
+    # пробуем слитно (например "датарождения")
+    w2 = w.replace(" ", "")
+    return _QUICK_EDIT_FIELD_ALIASES.get(w2)
+def _parse_quick_edit(text: str) -> Optional[tuple[str, str, str]]:
+    """
+    Возвращает (who, field, value).
+    Поддержка:
+      - <who> <field> <value>        (FORESTER уровень 3)
+      - <who> <value> <field>        (FORESTER 3 уровень, FORESTER +10 elo)
+      - <who> <verb> <field> <value> (FORESTER сделай ему уровень 3)
+      - <who> <verb> <value> <field> (FORESTER добавь 3 cw kills)
+      - <who> <verb> <field>         (FORESTER очисти дискорд / сбрось cw kills)
+    """
+    s_raw = (text or "").strip()
+    if not s_raw:
+        return None
+
+    who, rest_raw = _extract_who_and_rest(s_raw)
+    if not who or not rest_raw:
+        return None
+
+    rest_norm = rest_raw.strip().lower().replace("ё", "е")
+    rest_norm = re.sub(r"\s+", " ", rest_norm).strip()
+
+    # Хелперы
+    CLEAR_WORDS = {"clear", "очисти", "очистить", "удали", "удалить", "remove", "none", "нет", "-", "сбрось", "сбросить"}
+    VERBS = (
+        "сделай", "поставь", "установи", "измени", "поменяй", "назначь", "присвой", "выставь",
+        "дай", "добавь", "прибавь", "плюс", "убавь", "минус", "сними", "убери", "удали", "очисти", "сбрось"
+    )
+
+    def strip_leading_verbs(rn: str, rr: str) -> tuple[str, str, bool]:
+        cleared = False
+        # убираем "ему/ей/ему пожалуйста"
+        rn2 = re.sub(r"^(?:кому\s+)?(?:ему|ей)\s+", "", rn).strip()
+        rr2 = re.sub(r"^(?:кому\s+)?(?:ему|ей)\s+", "", rr, flags=re.IGNORECASE).strip()
+        rn, rr = rn2, rr2
+        # убираем начальный глагол
+        for v in VERBS:
+            if rn.startswith(v + " "):
+                rn = rn[len(v):].strip()
+                rr = rr[len(v):].strip()
+                if v in {"удали", "очисти", "сбрось"}:
+                    cleared = True
+                break
+        return rn, rr, cleared
+
+    rest_norm2, rest_raw2, verb_implies_clear = strip_leading_verbs(rest_norm, rest_raw)
+
+    # Список алиасов полей (сначала более длинные, чтобы "cw mvp list" поймался раньше "cw mvp")
+    alias_keys = sorted(_QUICK_EDIT_FIELD_ALIASES.keys(), key=lambda x: len(x), reverse=True)
+
+    def match_field_at_start(rn: str, rr: str):
+        for k in alias_keys:
+            if rn == k or rn.startswith(k + " "):
+                field = _canon_field(k)
+                value_raw = rr[len(k):].strip() if len(rr) >= len(k) else ""
+                return field, value_raw
+        return None, None
+
+    def match_field_at_end(rn: str, rr: str):
+        for k in alias_keys:
+            if rn == k or rn.endswith(" " + k):
+                field = _canon_field(k)
+                value_raw = rr[: -len(k)].strip()
+                return field, value_raw
+        return None, None
+
+    # 1) "<field> <value>"
+    field, value = match_field_at_start(rest_norm2, rest_raw2)
+    if field:
+        if not value and verb_implies_clear:
+            return who, field, "clear"
+        return who, field, value.strip()
+
+    # 2) "<value> <field>"
+    field, value = match_field_at_end(rest_norm2, rest_raw2)
+    if field:
+        if not value and verb_implies_clear:
+            return who, field, "clear"
+        return who, field, value.strip()
+
+    # 3) Попытка общего шаблона "<field> = <value>" / "<field>: <value>"
+    m = re.match(r"^(?P<field>.+?)\s*(?:=|:)\s*(?P<value>.+)$", rest_norm2, flags=re.IGNORECASE)
+    if m:
+        f = _canon_field(m.group("field").strip())
+        if f:
+            # value берём из raw по разделителю (чтобы сохранить регистр/символы)
+            mraw = re.match(r"^(?P<field>.+?)\s*(?:=|:)\s*(?P<value>.+)$", rest_raw2, flags=re.IGNORECASE)
+            vraw = (mraw.group("value") if mraw else m.group("value")).strip()
+            return who, f, vraw
+
+    # 4) Если текст похож на "очисти <field>" (без значения)
+    tokens = rest_norm.split()
+    if tokens and tokens[0] in CLEAR_WORDS and len(tokens) >= 2:
+        f = _canon_field(" ".join(tokens[1:]))
+        if f:
+            return who, f, "clear"
+
+    return None
+
+
+
+@dp.message(F.text)
+async def admin_quick_edit_text(message: Message):
+    # Чтобы не ловить обычные разговоры — включаем только в ЛС
+    if message.chat.type != "private":
+        return
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        return
+
+    txt = (message.text or "").strip()
+    if not txt or txt.startswith("/"):
+        return
+
+    parsed = _parse_quick_edit(txt)
+    if not parsed:
+        return
+
+    who, field, value = parsed
+
+    user, candidates = await resolve_user_query(who)
+    if not user:
+        if not candidates:
+            await message.answer("❌ Игрок не найден. Пример: FORESTER уровень 3 или #0123 фракция Штаб")
+            return
+        # несколько кандидатов
+        lines = ["Найдено несколько игроков, уточните запрос (лучше ClanID или Telegram ID):"]
+        for u in candidates[:10]:
+            lines.append(
+                f"• {u.get('nickname') or '-'} — ClanID: {pad_clan_id(u.get('clan_id'))} — ID: <code>{u.get('user_id')}</code> — фракция: {u.get('faction') or '-'}"
+            )
+        await message.answer("\n".join(lines))
+        return
+
+    ok, info = await apply_quick_edit(message.from_user.id, user, field, value)
+    if ok:
+        updated = await get_user(int(user.get("user_id")))
+        try:
+            await message.answer(info + "\n\n" + format_profile(updated, history=await get_tournament_history(int(updated.get("user_id")))),
+                                 reply_markup=profile_admin_kb(int(updated.get("user_id")), actor_id=message.from_user.id))
+        except Exception:
+            await message.answer(info)
+    else:
+        await message.answer(info)
+
+uid_str, role_code = call.data.split(":")
         target_id = int(uid_str)
     except Exception:
         await call.answer("Ошибка данных.", show_alert=True)
@@ -4712,6 +4996,348 @@ def normalize_bot_nick(name: str) -> str:
         name = name.split("(", 1)[0].strip()
     return name
 
+
+
+def normalize_nick_key(name: str) -> str:
+    """Единая нормализация ников для сравнений/поиска.
+
+    - убирает префиксы вида [BB]
+    - убирает хвосты вида "Nick(Name)"
+    - убирает служебные поля после "|"
+    - приводит к casefold и выкидывает пробелы
+    """
+    if not name:
+        return ""
+    # сначала чистим формат сервера (|, [BB], кавычки)
+    try:
+        name = normalize_server_nick(name)
+    except Exception:
+        name = (name or "").strip()
+
+    # затем чистим формат бота (скобки с именем)
+    try:
+        name = normalize_bot_nick(name)
+    except Exception:
+        name = (name or "").strip()
+
+    # убрать любые клан-теги вида [XXX] в начале
+    name = re.sub(r"^\s*\[[^\]]+\]\s*", "", name, flags=re.IGNORECASE).strip()
+
+    # схлопнуть пробелы/подчёркивания/дефисы для устойчивого поиска
+    key = re.sub(r"[\s_\-]+", "", name).casefold()
+    return key
+
+
+async def resolve_user_query(query: str) -> tuple[Optional[dict], list[dict]]:
+    """Пытается однозначно найти игрока по:
+    - Telegram user_id (цифры)
+    - ClanID (например 0123, #0123)
+    - @username / t.me/username
+    - ник (с нормализацией: регистр, [BB], скобки, пробелы)
+    Возвращает (user_or_none, candidates_list).
+    """
+    q = (query or "").strip()
+    if not q:
+        return None, []
+
+    # 1) Telegram user_id
+    if q.isdigit():
+        u = await get_user(int(q))
+        return (u, [u] if u else [])
+
+    # 2) ClanID
+    m_cid = re.match(r"^#?(\d{1,6})$", q)
+    if m_cid:
+        cid = int(m_cid.group(1))
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("SELECT * FROM users WHERE clan_id = ? LIMIT 5", (cid,))
+            rows = await cur.fetchall()
+            cols = [c[0] for c in cur.description]
+        candidates = [dict(zip(cols, r)) for r in rows]
+        if len(candidates) == 1:
+            return candidates[0], candidates
+        return None, candidates
+
+    # 3) @username / ссылка
+    if q.startswith("@"):
+        u = await get_user_by_username(q)
+        return (u, [u] if u else [])
+    if "t.me/" in q:
+        # вытащить username из ссылки
+        uname = q.split("t.me/", 1)[-1].strip().strip("/")
+        if uname:
+            u = await get_user_by_username("@" + uname)
+            return (u, [u] if u else [])
+
+    # 4) nick exact by normalized key
+    q_key = normalize_nick_key(q)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id, clan_id, nickname, tg_link, status, faction FROM users")
+        rows = await cur.fetchall()
+
+    exact = []
+    for uid, clan_id, nick, tg_link, status, faction in rows:
+        if normalize_nick_key(nick or "") == q_key and q_key:
+            exact.append({
+                "user_id": uid,
+                "clan_id": clan_id,
+                "nickname": nick,
+                "tg_link": tg_link,
+                "status": status,
+                "faction": faction,
+            })
+
+    if len(exact) == 1:
+        return await get_user(int(exact[0]["user_id"])), [await get_user(int(exact[0]["user_id"]))]
+
+    if len(exact) > 1:
+        # несколько точных совпадений (редко, но бывает)
+        full = [await get_user(int(x["user_id"])) for x in exact]
+        full = [u for u in full if u]
+        return None, full
+
+    # 5) fallback: contains by key (до 10)
+    contains = []
+    for uid, clan_id, nick, tg_link, status, faction in rows:
+        nk = normalize_nick_key(nick or "")
+        if q_key and nk and q_key in nk:
+            contains.append({
+                "user_id": uid,
+                "clan_id": clan_id,
+                "nickname": nick,
+                "tg_link": tg_link,
+                "status": status,
+                "faction": faction,
+            })
+        if len(contains) >= 10:
+            break
+
+    full = [await get_user(int(x["user_id"])) for x in contains]
+    full = [u for u in full if u]
+    if len(full) == 1:
+        return full[0], full
+    return None, full
+
+
+def _parse_date_any(value: str) -> Optional[str]:
+    v = (value or "").strip()
+    if not v:
+        return None
+    # DD.MM.YYYY
+    try:
+        d = datetime.strptime(v, "%d.%m.%Y").date()
+        return d.isoformat()
+    except Exception:
+        pass
+    # YYYY-MM-DD
+    try:
+        d = datetime.strptime(v, "%Y-%m-%d").date()
+        return d.isoformat()
+    except Exception:
+        return None
+
+
+def _status_from_text(value: str) -> Optional[str]:
+    v = (value or "").strip().casefold()
+    if not v:
+        return None
+    mapping = {
+        "new": Status.NEW.value,
+        "новый": Status.NEW.value,
+        "pending_channel": Status.PENDING_CHANNEL.value,
+        "ожидает_канал": Status.PENDING_CHANNEL.value,
+        "pending_review": Status.PENDING_REVIEW.value,
+        "на_проверке": Status.PENDING_REVIEW.value,
+        "joined": Status.JOINED.value,
+        "в_клане": Status.JOINED.value,
+        "клан": Status.JOINED.value,
+        "removed": Status.REMOVED.value,
+        "удален": Status.REMOVED.value,
+        "reserve": "reserve",
+        "резерв": "reserve",
+    }
+    if v in mapping:
+        return mapping[v]
+    # допускаем ввод значения как есть
+    return value.strip()
+
+
+def _extract_who_and_rest(text: str) -> tuple[str, str]:
+    """Пытаемся отделить 'кого' от команды.
+    Поддержка кавычек: "ник с пробелом" уровень 3
+    """
+    s = (text or "").strip()
+    if not s:
+        return "", ""
+
+    if s.startswith("\""):
+        # "..." rest
+        m = re.match(r'^"([^"]+)"\s+(.*)$', s)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+
+    parts = s.split(maxsplit=1)
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[1]
+
+
+async def apply_quick_edit(actor_id: int, target: dict, field: str, value: str) -> tuple[bool, str]:
+    """Валидирует и применяет изменение поля в users. Возвращает (ok, message)."""
+    uid = int(target.get("user_id"))
+    updates: dict = {}
+
+    field = field.lower().strip()
+
+    # очистка
+    if value.strip().casefold() in {"clear", "очисти", "очистить", "удали", "remove", "none", "-"}:
+        updates[field] = None
+        await upsert_user(uid, **updates)
+        return True, f"✅ {field} очищено."
+
+    if field in {"level", "уровень", "lvl", "level"}:
+        try:
+            lvl = int(re.findall(r"-?\d+", value)[0])
+            if lvl < 1 or lvl > 6:
+                return False, "❌ Уровень должен быть числом 1–6."
+            updates["level"] = lvl
+        except Exception:
+            return False, "❌ Не понял уровень. Пример: FORESTER уровень 3"
+
+    elif field in {"faction", "фракция"}:
+        updates["faction"] = value.strip()
+
+    elif field in {"nickname", "ник", "имя"}:
+        updates["nickname"] = value.strip()
+
+    elif field in {"discord", "дискорд"}:
+        updates["discord"] = value.strip()
+
+    elif field in {"steamid", "steam", "стим", "steam_id"}:
+        updates["steamid"] = value.strip()
+
+    elif field in {"tg_link", "tg", "тг", "telegram", "телеграм"}:
+        updates["tg_link"] = value.strip()
+
+    elif field in {"timezone", "tz", "часовой", "часовойпояс", "таймзона"}:
+        updates["timezone"] = value.strip()
+
+    elif field in {"phone", "телефон", "номер"}:
+        updates["phone"] = value.strip()
+
+    elif field in {"birth_date", "др", "датарождения", "рождение"}:
+        iso = _parse_date_any(value)
+        if not iso:
+            return False, "❌ Дата рождения: ДД.ММ.ГГГГ или YYYY-MM-DD"
+        # пересчёт возраста
+        bdate = datetime.strptime(iso, "%Y-%m-%d").date()
+        today = date.today()
+        age = today.year - bdate.year - ((today.month, today.day) < (bdate.month, bdate.day))
+        updates["birth_date"] = iso
+        updates["age"] = age
+
+    elif field in {"age", "возраст"}:
+        try:
+            a = int(re.findall(r"\d+", value)[0])
+            if a < 0 or a > 120:
+                return False, "❌ Возраст выглядит неверно."
+            updates["age"] = a
+        except Exception:
+            return False, "❌ Возраст должен быть числом."
+
+    elif field in {"clan_id", "clanid", "кланид", "cid"}:
+        try:
+            cid = int(re.findall(r"\d+", value)[0])
+            if cid < 1 or cid > 999999:
+                return False, "❌ ClanID выглядит неверно."
+            updates["clan_id"] = cid
+        except Exception:
+            return False, "❌ ClanID должен быть числом."
+
+    elif field in {"status", "статус"}:
+        st = _status_from_text(value)
+        if not st:
+            return False, "❌ Не понял статус."
+        updates["status"] = st
+
+    elif field in {"elo", "elo_rating", "рейтинг"}:
+        v = value.strip()
+        # поддержка: elo +10 / elo -10 / elo 1200
+        m = re.match(r"^([+-])\s*(\d+)$", v)
+        if m:
+            delta = int(m.group(2)) * (1 if m.group(1) == "+" else -1)
+            cur = int(target.get("elo_rating") or 1000)
+            updates["elo_rating"] = cur + delta
+        else:
+            try:
+                er = int(re.findall(r"-?\d+", v)[0])
+                updates["elo_rating"] = er
+            except Exception:
+                return False, "❌ Elo: пример 'FORESTER elo 1200' или 'FORESTER elo +10'"
+    elif field in {"elo_rank", "ранг", "rank"}:
+        # строковый ранг
+        rnk = value.strip()
+        if not rnk or rnk.casefold() in {"none", "нет", "-"}:
+            updates["elo_rank"] = "None"
+        else:
+            updates["elo_rank"] = rnk
+
+    elif field in {"cw_wins", "cw_losses", "cw_revives", "cw_kills", "cw_deaths", "cw_capture_points", "cw_mvp_count"}:
+        v = value.strip()
+        # поддержка: "cw kills +3" / "cw kills -2" / "cw kills 10" / "cw kills +=3"
+        m = re.match(r"^(?:\+\=|\-\=)?\s*([+-])\s*(\d+)$", v)
+        cur = int(target.get(field) or 0)
+        if m:
+            delta = int(m.group(2)) * (1 if m.group(1) == "+" else -1)
+            updates[field] = cur + delta
+        else:
+            try:
+                n = int(re.findall(r"-?\d+", v)[0])
+                updates[field] = n
+            except Exception:
+                return False, f"❌ {field}: пример 'FORESTER {field} 10' или 'FORESTER {field} +3'"
+
+    elif field in {"cw_mvp_list"}:
+        # строка: можно задать целиком или очистить
+        s = value.strip()
+        if not s or s.casefold() in {"none", "нет", "-"}:
+            updates["cw_mvp_list"] = None
+        else:
+            updates["cw_mvp_list"] = s
+
+    elif field in {"created_at", "applied_at", "approved_at", "joined_at"}:
+        # допускаем установку ISO-строки или "now"
+        v = value.strip().casefold()
+        if v in {"now", "сейчас"}:
+            updates[field] = datetime.utcnow().isoformat(timespec="seconds")
+        else:
+            # лёгкая валидация (не жёсткая), чтобы не блокировать ручные правки
+            if len(value.strip()) < 10:
+                return False, f"❌ {field}: ожидаю дату/время (например 2025-12-16T12:00:00) или 'now'"
+            updates[field] = value.strip()
+
+
+    else:
+        return False, f"❌ Поле '{field}' не поддерживается быстрыми командами."
+
+    await upsert_user(uid, **updates)
+
+    try:
+        await log_mod_action(actor_id, f"Quick edit: {list(updates.keys())[0]}", target_id=uid, extra=str(updates))
+    except Exception:
+        pass
+
+    # уведомление игроку (только для безопасных полей)
+    safe_notify = {"level", "faction", "nickname", "discord", "steamid", "timezone", "tg_link", "status"}
+    k = list(updates.keys())[0]
+    if k in safe_notify:
+        try:
+            await bot.send_message(uid, f"✏️ Ваш профиль обновлён: <b>{k}</b> → <code>{updates[k]}</code>")
+        except Exception:
+            pass
+
+    return True, f"✅ Обновлено: {k} → {updates[k]}"
+
 def parse_listplayers_to_names(raw: str) -> list[str]:
     """
     Парсер на случай разного формата вывода ListPlayers.
@@ -5188,88 +5814,6 @@ async def send_evening_training_poll():
         except Exception:
             continue
 
-def _msk_shift_hours(tz_value: str | None) -> int:
-    """
-    Преобразует users.timezone в сдвиг часов относительно Москвы.
-    Поддерживает: MSK, MSK+N, MSK-N, а также (на всякий случай) IANA-таймзоны.
-    """
-    if not tz_value:
-        return 0
-    v = (tz_value or "").strip()
-
-    if v == "MSK":
-        return 0
-
-    try:
-        import re
-        m = re.match(r"^MSK([+-])(\d+)$", v)
-        if m:
-            sign = 1 if m.group(1) == "+" else -1
-            return sign * int(m.group(2))
-    except Exception:
-        pass
-
-    # fallback: если админ руками впишет Europe/Berlin и т.п.
-    try:
-        msk = ZoneInfo("Europe/Moscow")
-        z = ZoneInfo(v)
-        now_utc = datetime.utcnow().replace(tzinfo=ZoneInfo("UTC"))
-        off_msk = now_utc.astimezone(msk).utcoffset() or timedelta(0)
-        off_z = now_utc.astimezone(z).utcoffset() or timedelta(0)
-        return int((off_z - off_msk).total_seconds() // 3600)
-    except Exception:
-        return 0
-
-
-async def send_training_polls_localtime_tick():
-    """
-    Раз в минуту (по МСК) проверяет локальное время каждого игрока
-    и отправляет:
-      - 15:30 локально: основной опрос всем
-      - 18:30 локально: повтор только тем, кто не ответил сегодня
-    """
-    msk = ZoneInfo("Europe/Moscow")
-    now_msk = datetime.now(msk)
-    date_str = now_msk.date().isoformat()
-
-    poll_text = f"Будешь сегодня на тренировке?\nДата: <b>{date_str}</b>"
-    kb = training_kb(date_str)
-
-    # берём всех активных (joined) и не в "Резерв"
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT user_id, timezone FROM users WHERE status = ? AND (faction IS NULL OR faction != 'Резерв')",
-            ("joined",),
-        )
-        users = await cur.fetchall()
-
-        cur = await db.execute(
-            "SELECT user_id FROM training_attendance WHERE date = ?",
-            (date_str,),
-        )
-        answered = {r[0] for r in await cur.fetchall()}
-
-    for uid, tz_value in users:
-        shift = _msk_shift_hours(tz_value)
-        now_local = now_msk + timedelta(hours=shift)
-
-        # 15:30 по времени игрока — основной опрос
-        if now_local.hour == 15 and now_local.minute == 30:
-            try:
-                await bot.send_message(uid, poll_text, reply_markup=kb)
-            except Exception:
-                pass
-            continue
-
-        # 18:30 по времени игрока — повтор, если не ответил
-        if now_local.hour == 18 and now_local.minute == 30:
-            if uid in answered:
-                continue
-            try:
-                await bot.send_message(uid, poll_text, reply_markup=kb)
-            except Exception:
-                pass
-
 async def check_training_inactive_3days():
     # Find users who have no answers for the last 3 days (MSK)
     msk = ZoneInfo("Europe/Moscow")
@@ -5598,15 +6142,16 @@ async def on_train_online(call: CallbackQuery):
 
     answered_set = set()
     for _uid, nick in answered_rows:
-        bn = normalize_bot_nick(nick or "")
-        if bn:
-            answered_set.add(bn.casefold())
+        k = normalize_nick_key(nick or "")
+        if k:
+            answered_set.add(k)
 
     yes_not_online = []
     for _uid, nick, link in yes_rows:
-        bn = normalize_bot_nick(nick or "")
-        if bn and bn.lower() not in online_bb:
-            yes_not_online.append((bn, link))
+        disp = normalize_bot_nick(nick or "") or (nick or "")
+        k = normalize_nick_key(nick or "")
+        if k and k not in online_bb:
+            yes_not_online.append((disp, link))
 
     online_no_answer = [n for n in sorted(online_bb) if n not in answered_set]
 
@@ -6584,7 +7129,8 @@ async def main():
         scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
         global CW_SCHEDULER
         CW_SCHEDULER = scheduler
-        scheduler.add_job(send_training_polls_localtime_tick, CronTrigger(minute="*"))
+        scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
+        scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
         scheduler.add_job(apply_training_noresponse_penalties, CronTrigger(hour=20, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
         scheduler.add_job(check_reserve_expired, CronTrigger(hour=10, minute=15))
