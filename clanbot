@@ -5188,6 +5188,88 @@ async def send_evening_training_poll():
         except Exception:
             continue
 
+def _msk_shift_hours(tz_value: str | None) -> int:
+    """
+    Преобразует users.timezone в сдвиг часов относительно Москвы.
+    Поддерживает: MSK, MSK+N, MSK-N, а также (на всякий случай) IANA-таймзоны.
+    """
+    if not tz_value:
+        return 0
+    v = (tz_value or "").strip()
+
+    if v == "MSK":
+        return 0
+
+    try:
+        import re
+        m = re.match(r"^MSK([+-])(\d+)$", v)
+        if m:
+            sign = 1 if m.group(1) == "+" else -1
+            return sign * int(m.group(2))
+    except Exception:
+        pass
+
+    # fallback: если админ руками впишет Europe/Berlin и т.п.
+    try:
+        msk = ZoneInfo("Europe/Moscow")
+        z = ZoneInfo(v)
+        now_utc = datetime.utcnow().replace(tzinfo=ZoneInfo("UTC"))
+        off_msk = now_utc.astimezone(msk).utcoffset() or timedelta(0)
+        off_z = now_utc.astimezone(z).utcoffset() or timedelta(0)
+        return int((off_z - off_msk).total_seconds() // 3600)
+    except Exception:
+        return 0
+
+
+async def send_training_polls_localtime_tick():
+    """
+    Раз в минуту (по МСК) проверяет локальное время каждого игрока
+    и отправляет:
+      - 15:30 локально: основной опрос всем
+      - 18:30 локально: повтор только тем, кто не ответил сегодня
+    """
+    msk = ZoneInfo("Europe/Moscow")
+    now_msk = datetime.now(msk)
+    date_str = now_msk.date().isoformat()
+
+    poll_text = f"Будешь сегодня на тренировке?\nДата: <b>{date_str}</b>"
+    kb = training_kb(date_str)
+
+    # берём всех активных (joined) и не в "Резерв"
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, timezone FROM users WHERE status = ? AND (faction IS NULL OR faction != 'Резерв')",
+            ("joined",),
+        )
+        users = await cur.fetchall()
+
+        cur = await db.execute(
+            "SELECT user_id FROM training_attendance WHERE date = ?",
+            (date_str,),
+        )
+        answered = {r[0] for r in await cur.fetchall()}
+
+    for uid, tz_value in users:
+        shift = _msk_shift_hours(tz_value)
+        now_local = now_msk + timedelta(hours=shift)
+
+        # 15:30 по времени игрока — основной опрос
+        if now_local.hour == 15 and now_local.minute == 30:
+            try:
+                await bot.send_message(uid, poll_text, reply_markup=kb)
+            except Exception:
+                pass
+            continue
+
+        # 18:30 по времени игрока — повтор, если не ответил
+        if now_local.hour == 18 and now_local.minute == 30:
+            if uid in answered:
+                continue
+            try:
+                await bot.send_message(uid, poll_text, reply_markup=kb)
+            except Exception:
+                pass
+
 async def check_training_inactive_3days():
     # Find users who have no answers for the last 3 days (MSK)
     msk = ZoneInfo("Europe/Moscow")
@@ -6502,8 +6584,7 @@ async def main():
         scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Moscow"))
         global CW_SCHEDULER
         CW_SCHEDULER = scheduler
-        scheduler.add_job(send_daily_training_poll, CronTrigger(hour=15, minute=30))
-        scheduler.add_job(send_evening_training_poll, CronTrigger(hour=18, minute=0))
+        scheduler.add_job(send_training_polls_localtime_tick, CronTrigger(minute="*"))
         scheduler.add_job(apply_training_noresponse_penalties, CronTrigger(hour=20, minute=0))
         scheduler.add_job(check_training_inactive_3days, CronTrigger(hour=18, minute=5))
         scheduler.add_job(check_reserve_expired, CronTrigger(hour=10, minute=15))
