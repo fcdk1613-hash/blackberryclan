@@ -3837,7 +3837,7 @@ async def on_edit_setlevel(call: CallbackQuery):
         await call.answer("Некорректные данные.", show_alert=True)
         return
 
-    await update_user(target_id, {"level": lvl})
+    await upsert_user(target_id, level=lvl)
     user = await get_user(target_id)
     text = format_profile(user, title="Редактирование профиля")
     await call.message.edit_text(
