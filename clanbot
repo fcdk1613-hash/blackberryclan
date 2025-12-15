@@ -2616,6 +2616,7 @@ def generate_cw_result_image(
         name_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
         small_font = ImageFont.truetype("DejaVuSans.ttf", 24)
         tiny_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+        col_font = ImageFont.truetype("DejaVuSans.ttf", 20)
     except Exception:
         title_font = score_font = name_font = small_font = tiny_font = ImageFont.load_default()
 
