@@ -872,128 +872,108 @@ def generate_role_tree_image(
         d = int(depth_map.get(c, 0))
         max_depth = max(max_depth, d)
         by_col.setdefault(col, {}).setdefault(d, []).append(c)
-        # количество уровней (этажей) = максимальная глубина + 1
-        steps = max_depth + 1
 
     # сортируем внутри каждой клетки
     for col in by_col:
         for d in by_col[col]:
             by_col[col][d].sort(key=sort_key)
 
-    # --- геометрия (ПОРТРЕТ): Y = глубина (иерархия), X = колонка-направление ---
-    # Раньше схема была "ландшафт" (X=глубина), из‑за этого получались длинные провода и терялась иерархичность.
-    # Теперь уровни карьеры идут сверху вниз, а направления — как "сваймлейны" слева направо.
-    block_w, block_h = 320, 130
-    x_gap = 110          # расстояние между направлениями по X
-    y_gap = 120          # расстояние между уровнями (глубиной) по Y
+    # --- геометрия (ЛАНДШАФТ): X = глубина, Y = колонка-направление ---
+    block_w, block_h = 260, 110
+    x_gap = 140          # расстояние между "шагами" карьеры по X
+    y_gap = 90           # расстояние между направлениями по Y
     sub_gap = 14         # расстояние между блоками внутри одной ячейки (если их несколько)
 
-    margin_left, margin_right = 80, 80
-    margin_top, margin_bottom = 170, 90
+    margin_x, margin_top, margin_bottom = 80, 170, 90
 
     col_keys = [k for _, k in TREE_COLUMNS]
-    col_index = {k: i for i, k in enumerate(col_keys)}
+    row_index = build_row_index()
 
-    # сколько "этажей-стопок" может быть в глубине (по всем колонкам)
-    row_heights: list[int] = []
-    for d in range(steps):
-        max_stack = 1
-        for ck in col_keys:
-            max_stack = max(max_stack, len(by_col.get(ck, {}).get(d, [])) or 0)
-        row_h = max_stack * block_h + max(0, max_stack - 1) * sub_gap
-        row_heights.append(row_h)
+    # сколько "этажей-стопок" может быть в ячейке (колонка-направление, глубина)
+    max_stack = 1
+    for ck in col_keys:
+        for d, lst in by_col.get(ck, {}).items():
+            max_stack = max(max_stack, len(lst))
 
-    total_h = margin_top + sum(row_heights) + (steps - 1) * y_gap + margin_bottom
-    total_w = margin_left + len(col_keys) * block_w + (len(col_keys) - 1) * x_gap + margin_right
+    # итоговые размеры
+    steps = max_depth + 1
+    rows = len(col_keys)
 
-    img = Image.new("RGBA", (total_w, total_h), (13, 13, 24, 255))
+    cell_h = max_stack * block_h + (max_stack - 1) * sub_gap
+    img_w = margin_x * 2 + steps * block_w + (steps - 1) * x_gap
+    img_h = margin_top + margin_bottom + rows * cell_h + (rows - 1) * y_gap
+
+    img = Image.new("RGBA", (img_w, img_h), (10, 10, 20, 255))
     draw = ImageDraw.Draw(img)
 
-    # --- fonts (обязательно определяем ДО первого использования) ---
+    # --- шрифты ---
     try:
-        title_font = ImageFont.truetype("DejaVuSans.ttf", 28)
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+        node_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+        col_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
     except Exception:
-        title_font = ImageFont.load_default()
-    
-    try:
-        node_font = ImageFont.truetype("DejaVuSans.ttf", 22)
-    except Exception:
-        node_font = ImageFont.load_default()
-    
-    try:
-        small_font = ImageFont.truetype("DejaVuSans.ttf", 18)
-    except Exception:
-        small_font = ImageFont.load_default()
-    
-    try:
-        col_font = ImageFont.truetype("DejaVuSans.ttf", 20)
-    except Exception:
-        col_font = ImageFont.load_default()
+        title_font = node_font = col_font = ImageFont.load_default()
 
-    # фоновые "сваймлейны" (тонкие прямоугольники по колонкам)
-    lane_color = (18, 18, 34, 255)
-    lane_border = (40, 40, 70, 255)
-    for i, (title, key) in enumerate(TREE_COLUMNS):
-        x1 = margin_left + i * (block_w + x_gap)
-        x2 = x1 + block_w
-        draw.rounded_rectangle((x1 - 10, margin_top - 50, x2 + 10, total_h - margin_bottom + 20),
-                               radius=18, fill=lane_color, outline=lane_border, width=2)
+    # --- заголовок ---
+    header = "Дерево ролей"
+    if current_role:
+        header += f" (текущая: {get_role_title(current_role)})"
+    hb = draw.textbbox((0, 0), header, font=title_font)
+    hw = hb[2] - hb[0]
+    draw.text(((img_w - hw) // 2, 30), header, font=title_font, fill=(240, 240, 240))
 
-    # --- подписи направлений сверху ---
+    # --- подписи направлений слева ---
     for i, (title, key) in enumerate(TREE_COLUMNS):
-        x1 = margin_left + i * (block_w + x_gap)
-        draw.text((x1 + 6, margin_top - 44), title, font=col_font, fill=(200, 200, 230))
+        y_top = margin_top + i * (cell_h + y_gap)
+        draw.text((20, y_top + 8), title, font=col_font, fill=(200, 200, 230))
 
     # --- координаты блоков ---
     positions: dict[str, tuple[int, int, int, int]] = {}
 
-    y_cursor = margin_top
-    for d in range(steps):
-        row_h = row_heights[d]
+    for key in col_keys:
+        r = row_index[key]
+        row_y = margin_top + r * (cell_h + y_gap)
 
-        for key in col_keys:
-            i = col_index[key]
-            x1 = margin_left + i * (block_w + x_gap)
-
-            roles_list = by_col.get(key, {}).get(d, [])
+        depth_dict = by_col.get(key, {})
+        for d in range(steps):
+            roles_list = depth_dict.get(d, [])
             if not roles_list:
                 continue
 
-            # центрируем стопку в пределах row_h
+            x1 = margin_x + d * (block_w + x_gap)
+
+            # центрируем стопку в пределах cell_h
             stack_h = len(roles_list) * block_h + (len(roles_list) - 1) * sub_gap
-            start_y = y_cursor + (row_h - stack_h) // 2
+            start_y = row_y + (cell_h - stack_h) // 2
 
             for j, code in enumerate(roles_list):
                 y1 = start_y + j * (block_h + sub_gap)
                 positions[code] = (x1, y1, x1 + block_w, y1 + block_h)
 
-        y_cursor += row_h + y_gap
-
-    # --- рисуем связи (ортогонально сверху-вниз, чтобы читалось как иерархия) ---
+    # --- связи между блоками (по ROLE_GRAPH, но схлопываем скрытые узлы) ---
     visual_edges = build_visual_edges(ROLE_GRAPH, HIDDEN_TREE_ROLES)
+
     line_color = (90, 90, 140, 255)
 
-    def bottom_center(box):
+    def right_center(box):
         x1, y1, x2, y2 = box
-        return ((x1 + x2) // 2, y2)
+        return (x2, (y1 + y2) // 2)
 
-    def top_center(box):
+    def left_center(box):
         x1, y1, x2, y2 = box
-        return ((x1 + x2) // 2, y1)
+        return (x1, (y1 + y2) // 2)
 
     for p, c in visual_edges:
         if p not in positions or c not in positions:
             continue
 
-        px, py = bottom_center(positions[p])
-        cx, cy = top_center(positions[c])
+        px, py = right_center(positions[p])
+        cx, cy = left_center(positions[c])
+        mid_x = (px + cx) // 2
 
-        # общий "срез" по Y, чтобы линии не прыгали
-        mid_y = (py + cy) // 2
-
-        draw.line((px, py, px, mid_y), fill=line_color, width=3)
-        draw.line((px, mid_y, cx, mid_y), fill=line_color, width=3)
-        draw.line((cx, mid_y, cx, cy), fill=line_color, width=3)
+        draw.line((px, py, mid_x, py), fill=line_color, width=3)
+        draw.line((mid_x, py, mid_x, cy), fill=line_color, width=3)
+        draw.line((mid_x, cy, cx, cy), fill=line_color, width=3)
 
     # --- сами блоки ---
     for code, (x1, y1, x2, y2) in positions.items():
@@ -1019,15 +999,6 @@ def generate_role_tree_image(
         # переносим текст по строкам, если он не влезает по ширине
         lines = wrap_text(draw, title, node_font, block_w - 20)
 
-        # ограничиваем количество строк, чтобы текст не "ломал" блоки
-        if len(lines) > 3:
-            lines = lines[:3]
-            # добавим многоточие в конце последней строки, если нужно
-            last = lines[-1]
-            while last and (draw.textbbox((0, 0), last + "…", font=node_font)[2] - draw.textbbox((0, 0), last + "…", font=node_font)[0]) > (block_w - 20):
-                last = last[:-1].rstrip()
-            lines[-1] = (last + "…") if last else "…"
-
         # высота одной строки
         if lines:
             lb = draw.textbbox((0, 0), lines[0], font=node_font)
@@ -1047,8 +1018,8 @@ def generate_role_tree_image(
             draw.text((tx, ty), line, font=node_font, fill=(250, 250, 250, 255))
 
     # Легенда внизу
-    legend_y = total_h - margin_bottom + 10
-    legend_x = margin_left
+    legend_y = img_h - margin_bottom + 10
+    legend_x = margin_x
 
     box_w, box_h = 36, 20
 
@@ -2637,7 +2608,6 @@ def generate_cw_result_image(
         name_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
         small_font = ImageFont.truetype("DejaVuSans.ttf", 24)
         tiny_font = ImageFont.truetype("DejaVuSans.ttf", 20)
-        col_font = ImageFont.truetype("DejaVuSans.ttf", 20)
     except Exception:
         title_font = score_font = name_font = small_font = tiny_font = ImageFont.load_default()
 
@@ -7487,3 +7457,4 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
+
