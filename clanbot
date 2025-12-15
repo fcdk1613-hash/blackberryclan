@@ -4199,7 +4199,7 @@ async def admin_quick_edit_text(message: Message):
         await message.answer(info)
 
 uid_str, role_code = call.data.split(":")
-target_id = int(uid_str)
+    target_id = int(uid_str)
     except Exception:
         await call.answer("Ошибка данных.", show_alert=True)
         return
