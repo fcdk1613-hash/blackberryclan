@@ -872,6 +872,8 @@ def generate_role_tree_image(
         d = int(depth_map.get(c, 0))
         max_depth = max(max_depth, d)
         by_col.setdefault(col, {}).setdefault(d, []).append(c)
+        # количество уровней (этажей) = максимальная глубина + 1
+        steps = max_depth + 1
 
     # сортируем внутри каждой клетки
     for col in by_col:
