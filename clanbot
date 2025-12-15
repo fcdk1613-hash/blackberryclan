@@ -1426,7 +1426,7 @@ dp = Dispatcher()
 
 @dp.callback_query(F.data.startswith("hist:add:"))
 async def on_hist_add(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+    if call.from_user.id not in (ADMIN_IDS):
         await call.answer("Недостаточно прав.", show_alert=True)
         return
     _, _, uid = call.data.split(":")
