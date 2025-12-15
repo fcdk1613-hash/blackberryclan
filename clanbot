@@ -3020,7 +3020,7 @@ async def CW_register(war_id: int, user_id: int) -> tuple[bool, str]:
     u = await get_user(user_id)
     user_level = int((u.get("level") if u else None) or 1)
     if user_level > war_level:
-        return False, f"У вас недостаточный уровень допуска. Нужно: 1-{war_level}, у вас: {user_level}."
+        return False, f"У вас недостаточный уровень допуска. Нужен: {war_level} уровень, у вас: {user_level} уровень."
     regs = await CW_registrations(war_id)
     if user_id in regs:
         return False, "Вы уже зарегистрированы."
