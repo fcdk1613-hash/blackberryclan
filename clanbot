@@ -909,6 +909,12 @@ def generate_role_tree_image(
     img = Image.new("RGBA", (total_w, total_h), (13, 13, 24, 255))
     draw = ImageDraw.Draw(img)
 
+    # --- fonts (всегда определяем) ---
+    try:
+        col_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+    except Exception:
+        col_font = ImageFont.load_default()
+
     # фоновые "сваймлейны" (тонкие прямоугольники по колонкам)
     lane_color = (18, 18, 34, 255)
     lane_border = (40, 40, 70, 255)
