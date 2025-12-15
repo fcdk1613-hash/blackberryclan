@@ -4155,7 +4155,11 @@ def _parse_quick_edit(text: str) -> Optional[tuple[str, str, str]]:
 
 
 
-@dp.message(F.text)
+@dp.message(
+    F.chat.type == "private",
+    F.from_user.id.in_(ADMIN_IDS | MODERATOR_IDS),
+    F.text
+)
 async def admin_quick_edit_text(message: Message):
     # Чтобы не ловить обычные разговоры — включаем только в ЛС
     if message.chat.type != "private":
