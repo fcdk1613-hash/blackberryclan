@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS users (
     birth_date TEXT,
     timezone TEXT,
     tg_link TEXT,
+    level INTEGER DEFAULT 1,
     faction TEXT,
     status TEXT,
     created_at TEXT,
@@ -127,7 +128,7 @@ CREATE TABLE IF NOT EXISTS users (
 """
 CREATE_USERS_ARCHIVE_SQL = """
 CREATE TABLE IF NOT EXISTS users_archive AS
-SELECT user_id, clan_id, phone, nickname, discord, steamid, age, birth_date, timezone, tg_link,
+SELECT user_id, clan_id, phone, nickname, discord, steamid, age, birth_date, timezone, tg_link, level,
        faction, status, created_at, applied_at, approved_at, joined_at,
        '' AS archived_at
 FROM users WHERE 0;
@@ -149,6 +150,7 @@ CREATE TABLE IF NOT EXISTS cw_wars (
     team_size INTEGER NOT NULL,
     rules TEXT,
     server TEXT,
+    access_level INTEGER NOT NULL DEFAULT 6,
     status TEXT NOT NULL DEFAULT 'scheduled',
     winner TEXT,
     bb_score INTEGER,
@@ -1215,6 +1217,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN cw_capture_points INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN cw_mvp_count INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN cw_mvp_list TEXT",
+            "ALTER TABLE users ADD COLUMN level INTEGER DEFAULT 1",
             "ALTER TABLE users ADD COLUMN current_role TEXT",
         ]:
             try:
@@ -1222,12 +1225,22 @@ async def init_db():
             except Exception:
                 pass
         for alter in [
+            "ALTER TABLE users_archive ADD COLUMN level INTEGER DEFAULT 1",
             "ALTER TABLE users_archive ADD COLUMN archived_at TEXT",
         ]:
             try:
                 await db.execute(alter)
             except Exception:
                 pass
+        # CW migrations
+        for alter in [
+            "ALTER TABLE cw_wars ADD COLUMN access_level INTEGER NOT NULL DEFAULT 6",
+        ]:
+            try:
+                await db.execute(alter)
+            except Exception:
+                pass
+
         for alter in [
             "ALTER TABLE removal_checklist ADD COLUMN db_done INTEGER DEFAULT 0",
             "ALTER TABLE removal_checklist ADD COLUMN tg_done INTEGER DEFAULT 0",
@@ -1769,6 +1782,7 @@ def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="Дата рождения", callback_data=f"edit:field:{user_id}:birth_date")
     kb.button(text="Часовой пояс", callback_data=f"edit:field:{user_id}:timezone")
     kb.button(text="Личный TG", callback_data=f"edit:field:{user_id}:tg_link")
+    kb.button(text="Уровень", callback_data=f"edit:field:{user_id}:level")
     kb.row()
     kb.button(text="Звание", callback_data=f"edit:rank:{user_id}")
     kb.button(text="Роли", callback_data=f"edit:roles:{user_id}")
@@ -1792,6 +1806,7 @@ def format_profile(user: dict, title: str = "Профиль игрока", histo
         ("Возраст", user.get("age")),
         ("Часовой пояс", user.get("timezone")),
         ("Личный TG", user.get("tg_link")),
+        ("Уровень", user.get("level") if user.get("level") is not None else 1),
         ("Фракция", user.get("faction")),
         ("Звание", user.get("clan_title")),
         ("Роль", get_role_title(user.get("current_role"))),
@@ -2908,11 +2923,11 @@ async def CW_delete_war(war_id: int) -> bool:
         except Exception:
             return False
 # ======= CLAN WAR (CW) HELPERS =======
-async def CW_create_war(opponents: str, starts_at_iso: str, map_: str, team_size: int, rules: str, server: str) -> int:
+async def CW_create_war(opponents: str, starts_at_iso: str, map_: str, team_size: int, rules: str, server: str, access_level: int = 6) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO cw_wars(opponents, starts_at, map, team_size, rules, server) VALUES (?,?,?,?,?,?)",
-            (opponents.strip(), starts_at_iso, map_.strip(), int(team_size), rules.strip(), server.strip())
+            "INSERT INTO cw_wars(opponents, starts_at, map, team_size, rules, server, access_level) VALUES (?,?,?,?,?,?,?)",
+            (opponents.strip(), starts_at_iso, map_.strip(), int(team_size), rules.strip(), server.strip(), int(access_level))
         )
         await db.commit()
         return cur.lastrowid
@@ -2986,6 +3001,12 @@ async def CW_register(war_id: int, user_id: int) -> tuple[bool, str]:
     war = await CW_get_war(war_id)
     if not war or war.get("status") != "scheduled":
         return False, "КВ не найдено или уже завершено."
+    # Проверка уровня допуска (КВ уровня N доступно игрокам с уровнем 1..N)
+    war_level = int(war.get("access_level") or 6)
+    u = await get_user(user_id)
+    user_level = int((u.get("level") if u else None) or 1)
+    if user_level > war_level:
+        return False, f"У вас недостаточный уровень допуска. Нужно: 1-{war_level}, у вас: {user_level}."
     regs = await CW_registrations(war_id)
     if user_id in regs:
         return False, "Вы уже зарегистрированы."
@@ -4005,7 +4026,7 @@ async def on_edit_field(call: CallbackQuery, state: FSMContext):
         return
     _, _, uid_str, field = call.data.split(":")
     target_id = int(uid_str)
-    allowed = {"nickname","discord","steamid","birth_date","timezone","tg_link"}
+    allowed = {"nickname","discord","steamid","birth_date","timezone","tg_link","level"}
     if field not in allowed:
         await call.answer("Недопустимое поле.", show_alert=True)
         return
@@ -4016,6 +4037,7 @@ async def on_edit_field(call: CallbackQuery, state: FSMContext):
         "birth_date": "Введите новую дату рождения в формате ДД.ММ.ГГГГ:",
         "timezone": "Введите новый часовой пояс (например, GMT+3 или Europe/Moscow):",
         "tg_link": "Введите новую ссылку на ваш Telegram (например, https://t.me/username):",
+        "level": "Введите новый уровень игрока (1-6):",
     }
     await state.update_data(edit_user_id=target_id, edit_field=field, edit_message_id=call.message.message_id, chat_id=call.message.chat.id)
     await call.message.answer(prompts[field])
@@ -4033,7 +4055,16 @@ async def on_edit_value(message: Message, state: FSMContext):
         return
     value = (message.text or "").strip()
     updates = {}
-    if field == "birth_date":
+    if field == "level":
+        try:
+            lvl = int(value)
+            if lvl < 1 or lvl > 6:
+                raise ValueError
+        except Exception:
+            await message.answer("❌ Неверное значение. Уровень должен быть числом от 1 до 6.")
+            return
+        updates["level"] = lvl
+    elif field == "birth_date":
         from datetime import datetime, date as _date
         try:
             bdate = datetime.strptime(value, "%d.%m.%Y").date()
@@ -4072,6 +4103,7 @@ async def on_edit_value(message: Message, state: FSMContext):
             "birth_date": "Дата рождения",
             "timezone": "Часовой пояс",
             "tg_link": "Личный TG",
+            "level": "Уровень",
         }.get(field, field)
         log_text = (f"✏️ <b>Изменение профиля</b>\n"
                     f"Кем: {who} (ID: <code>{message.from_user.id}</code>)\n"
@@ -6152,6 +6184,7 @@ async def CW_menu_view(call: CallbackQuery):
     info = (
         f"⚔<b>{w['opponents']}</b>\n"
         f"⏰<b>Когда:</b> {format_cw_datetime(w['starts_at'])}\n🗺<b>Карта:</b> {w.get('map') or '-'}\n☠<b>Команда:</b> {w['team_size']} человек\n"
+        f"🎚<b>Уровень допуска:</b> {int(w.get('access_level') or 6)}\n"
         f"📢<b>Правила:</b> {w.get('rules') or '-'}\n🔌<b>Сервер:</b> {w.get('server') or '-'}\n"
         f"📜<b>Записались:</b> {len(regs)} / {w['team_size']} (свободно: {free})"
     )
@@ -6466,6 +6499,7 @@ class CWCreateState(StatesGroup):
     starts = State()
     map = State()
     team = State()
+    access_level = State()
     rules = State()
     server = State()
 
@@ -6508,8 +6542,8 @@ async def CW_create_team(message: Message, state: FSMContext):
     except Exception:
         await message.answer("Введите положительное число."); return
     await state.update_data(team_size=team)
-    await message.answer("Правила:")
-    await state.set_state(CWCreateState.rules)
+    await message.answer("Уровень допуска на КВ (1-6):")
+    await state.set_state(CWCreateState.access_level)
 
 @dp.message(CWCreateState.rules)
 async def CW_create_rules(message: Message, state: FSMContext):
@@ -6527,6 +6561,7 @@ async def CW_create_finish(message: Message, state: FSMContext):
         team_size=int(data.get("team_size")),
         rules=data.get("rules"),
         server=message.text.strip(),
+        access_level=int(data.get("access_level") or 6),
     )
     await state.clear()
     await message.answer(f"✅ КВ создано (ID: {war_id}). Откройте панель: /cw_admin")
@@ -6626,6 +6661,7 @@ async def CW_admin_panel(call: CallbackQuery):
     info = (
         f"<b>{w['opponents']}</b>\n"
         f"Время: {format_cw_datetime(w['starts_at'])}\nКарта: {w.get('map') or '-'}\nКоманда: {w['team_size']}\n"
+        f"Уровень допуска: {int(w.get('access_level') or 6)}\n"
         f"Правила: {w.get('rules') or '-'}\nСервер: {w.get('server') or '-'}\n\n"
         f"<b>Участники ({len(regs)}/{w['team_size']}):</b>\n" + ("\n".join(names) if names else "— пока нет —")
     )
@@ -6633,10 +6669,141 @@ async def CW_admin_panel(call: CallbackQuery):
     for uid in regs:
         kb.button(text=f"❌ Удалить {uid}", callback_data=f"cw:del:{war_id}:{uid}")
     kb.row()
+    kb.button(text="✏️ Редактировать КВ", callback_data=f"cw:edit:{war_id}")
     kb.button(text="🏁 Завершить КВ", callback_data=f"cw:finish:{war_id}")
     kb.button(text="🗑 Удалить КВ", callback_data=f"cw:delete:{war_id}")
     await call.message.answer(info, reply_markup=kb.adjust(1).as_markup())
     await call.answer()
+
+
+class CWEditState(StatesGroup):
+    waiting_value = State()
+
+def _cw_edit_kb(war_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⚔ Противник", callback_data=f"cw:editfield:{war_id}:opponents")
+    kb.button(text="⏰ Время", callback_data=f"cw:editfield:{war_id}:starts_at")
+    kb.button(text="🗺 Карта", callback_data=f"cw:editfield:{war_id}:map")
+    kb.button(text="☠ Размер команды", callback_data=f"cw:editfield:{war_id}:team_size")
+    kb.button(text="🎚 Уровень допуска", callback_data=f"cw:editfield:{war_id}:access_level")
+    kb.button(text="📢 Правила", callback_data=f"cw:editfield:{war_id}:rules")
+    kb.button(text="🔌 Сервер", callback_data=f"cw:editfield:{war_id}:server")
+    kb.row()
+    kb.button(text="⬅️ Назад", callback_data=f"cw:panel:{war_id}")
+    return kb.adjust(1).as_markup()
+
+@dp.callback_query(F.data.startswith("cw:edit:"))
+async def CW_admin_edit_menu(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    war_id = int(call.data.split(":")[2])
+    w = await CW_get_war(war_id)
+    if not w:
+        await call.answer("КВ не найдено.", show_alert=True)
+        return
+    await state.clear()
+    await call.message.answer(
+        f"✏️ <b>Редактирование КВ #{war_id}</b>\n"
+        f"Выберите поле, которое нужно изменить:",
+        reply_markup=_cw_edit_kb(war_id),
+    )
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("cw:editfield:"))
+async def CW_admin_edit_field(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+    _, _, war_id_s, field = call.data.split(":")
+    war_id = int(war_id_s)
+    allowed = {"opponents","starts_at","map","team_size","rules","server","access_level"}
+    if field not in allowed:
+        await call.answer("Недопустимое поле.", show_alert=True)
+        return
+    w = await CW_get_war(war_id)
+    if not w:
+        await call.answer("КВ не найдено.", show_alert=True)
+        return
+
+    current = w.get(field)
+    if field == "starts_at":
+        try:
+            current = format_cw_datetime(current) if current else None
+        except Exception:
+            pass
+
+    prompts = {
+        "opponents": "Введите противников (пример: BB vs CL):",
+        "starts_at": "Введите дату и время в формате ДД.ММ.ГГ ЧЧ:ММ:",
+        "map": "Введите карту:",
+        "team_size": "Введите размер команды (число):",
+        "rules": "Введите правила:",
+        "server": "Введите сервер:",
+        "access_level": "Введите уровень допуска (1-6):",
+    }
+    cur_line = f"\nТекущее значение: <code>{current}</code>" if current not in (None, "", "None") else ""
+    await state.update_data(cw_edit_war_id=war_id, cw_edit_field=field)
+    await call.message.answer(prompts[field] + cur_line)
+    await state.set_state(CWEditState.waiting_value)
+    await call.answer()
+
+@dp.message(CWEditState.waiting_value)
+async def CW_admin_edit_value(message: Message, state: FSMContext):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    war_id = data.get("cw_edit_war_id")
+    field = data.get("cw_edit_field")
+    if not war_id or not field:
+        await message.answer("Сессия редактирования не найдена. Откройте /cw_admin снова.")
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    value = raw
+
+    # Валидация и нормализация
+    if field == "team_size":
+        try:
+            v = int(raw)
+            if v <= 0:
+                raise ValueError
+            value = v
+        except Exception:
+            await message.answer("❌ Размер команды должен быть положительным числом.")
+            return
+
+    if field == "access_level":
+        try:
+            v = int(raw)
+            if v < 1 or v > 6:
+                raise ValueError
+            value = v
+        except Exception:
+            await message.answer("❌ Уровень допуска должен быть числом от 1 до 6.")
+            return
+
+    if field == "starts_at":
+        try:
+            dt = datetime.strptime(raw, "%d.%m.%y %H:%M")
+            value = dt.isoformat()
+        except Exception:
+            await message.answer("❌ Неверный формат. Введите дату/время как ДД.ММ.ГГ ЧЧ:ММ.")
+            return
+
+    # UPDATE
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE cw_wars SET {field}=? WHERE id=?", (value, int(war_id)))
+        await db.commit()
+
+    await log_mod_action(message.from_user.id, "Редактирование КВ", target_id=int(war_id), extra=f"Поле {field} обновлено")
+    await message.answer("✅ КВ обновлено.")
+    await state.clear()
+
 
 @dp.callback_query(F.data.startswith("cw:del:"))
 async def CW_admin_remove_player(call: CallbackQuery):
