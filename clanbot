@@ -1631,7 +1631,7 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
     kb.button(text="✏️ Редактировать", callback_data=f"edit:init:{user_id}")
     kb.button(text="🔄 Обновить", callback_data=f"profile_refresh:{user_id}")
     kb.row()
-    kb.button(text="➕ Добавить запись в историю Elo", callback_data=f"elo:panel:{user_id}")
+    kb.button(text="➕ Добавить запись в историю Elo", callback_data=f"elo:edit:{user_id}")
     if actor_id in (ADMIN_IDS | MODERATOR_IDS):
         kb.button(text="🌳 Карьера игрока", callback_data=f"career:user:{user_id}")
     if actor_id in ADMIN_IDS:
