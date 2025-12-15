@@ -909,11 +909,26 @@ def generate_role_tree_image(
     img = Image.new("RGBA", (total_w, total_h), (13, 13, 24, 255))
     draw = ImageDraw.Draw(img)
 
-    # --- fonts (всегда определяем) ---
-    try:
-        col_font = ImageFont.truetype("DejaVuSans.ttf", 20)
-    except Exception:
-        col_font = ImageFont.load_default()
+# --- fonts (обязательно определяем ДО первого использования) ---
+try:
+    title_font = ImageFont.truetype("DejaVuSans.ttf", 28)
+except Exception:
+    title_font = ImageFont.load_default()
+
+try:
+    node_font = ImageFont.truetype("DejaVuSans.ttf", 22)
+except Exception:
+    node_font = ImageFont.load_default()
+
+try:
+    small_font = ImageFont.truetype("DejaVuSans.ttf", 18)
+except Exception:
+    small_font = ImageFont.load_default()
+
+try:
+    col_font = ImageFont.truetype("DejaVuSans.ttf", 20)
+except Exception:
+    col_font = ImageFont.load_default()
 
     # фоновые "сваймлейны" (тонкие прямоугольники по колонкам)
     lane_color = (18, 18, 34, 255)
