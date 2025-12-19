@@ -5767,42 +5767,6 @@ async def send_training_polls_localtime_tick():
             except Exception:
                 pass
 
-async def check_training_inactive_3days():
-    # Find users who have no answers for the last 3 days (MSK)
-    msk = ZoneInfo("Europe/Moscow")
-    today = datetime.now(msk).date()
-    days = [(today - timedelta(days=i)).isoformat() for i in range(0, 3)]
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """
-            SELECT u.user_id, u.nickname, u.tg_link FROM users u
-            WHERE u.status = ?
-              AND (u.faction IS NULL OR u.faction != 'Резерв')
-              AND u.user_id NOT IN (
-                SELECT DISTINCT user_id FROM training_attendance
-                WHERE date IN (?,?,?)
-              )
-            """,
-            ("joined", days[0], days[1], days[2])
-        )
-        rows = await cur.fetchall()
-    if not rows:
-        return
-
-    lines: list[str] = []
-    for uid, nickname, tg_link in rows:
-        user = {"user_id": uid, "nickname": nickname, "tg_link": tg_link}
-        try:
-            disp = display_name(user)
-        except Exception:
-            disp = None
-        if not disp:
-            disp = nickname or tg_link or str(uid)
-        lines.append(f'Игрок "{disp}" не выходит на связь в течение 3-х дней')
-
-    text = "\n".join(lines)
-    await notify_staff(text)
-
 async def adjust_training_elo_for_training(user_id: int, delta: int) -> None:
     """
     Корректировка ELO за тренировки.
