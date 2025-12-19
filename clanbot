@@ -5041,6 +5041,36 @@ async def cmd_players(message: Message):
         rank_rows = await cur.fetchall()
         # ---- КОНЕЦ НОВОГО БЛОКА ----
 
+        # ---- НОВЫЙ БЛОК: агрегирование по ТЕКУЩИМ ролям (current_role) ----
+        cur = await db.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(current_role), ''), '—') AS role, COUNT(1) AS c
+            FROM users
+            WHERE status = 'joined'
+            GROUP BY role
+            """
+        )
+        raw_role_rows = await cur.fetchall()
+
+        # Нормализуем дубли (ROLE_ALIASES) и склеиваем счётчики
+        role_counts: dict[str, int] = {}
+        for role_code, c in raw_role_rows:
+            code = (role_code or "—").strip() if isinstance(role_code, str) else "—"
+            if code != "—":
+                code = norm_role(code) or code
+            role_counts[code] = role_counts.get(code, 0) + int(c)
+
+        # Удобный порядок вывода: по ROLE_ORDER, остальное — по алфавиту
+        ordered_role_codes: list[str] = []
+        for code in ROLE_ORDER:
+            if code in role_counts:
+                ordered_role_codes.append(code)
+        for code in sorted([k for k in role_counts.keys() if k not in ordered_role_codes], key=lambda x: get_role_title(x)):
+            ordered_role_codes.append(code)
+
+        role_rows = [(code, role_counts[code]) for code in ordered_role_codes]
+        # ---- КОНЕЦ НОВОГО БЛОКА ----
+
         cur = await db.execute(
             """
             SELECT clan_id, user_id, nickname, tg_link, discord, steamid, age, birth_date, timezone, faction, joined_at
@@ -5063,6 +5093,15 @@ async def cmd_players(message: Message):
         lines.append("")  # пустая строка для разделения
         lines.append("По званиям:")
         for title, c in rank_rows:
+            lines.append(f"• {title}: {c}")
+    # ---- КОНЕЦ НОВОГО БЛОКА ----
+
+    # ---- НОВЫЙ БЛОК: вывод по ролям (current_role) ----
+    if role_rows:
+        lines.append("")  # пустая строка для разделения
+        lines.append("По ролям (текущая роль):")
+        for code, c in role_rows:
+            title = "—" if code == "—" else get_role_title(code)
             lines.append(f"• {title}: {c}")
     # ---- КОНЕЦ НОВОГО БЛОКА ----
 
