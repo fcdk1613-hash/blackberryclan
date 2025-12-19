@@ -1623,9 +1623,16 @@ def apply_kb() -> InlineKeyboardMarkup:
     kb.button(text="📨 Отправить заявку", callback_data="send_apply")
     return kb.adjust(1).as_markup()
 
-def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboardMarkup:
+def profile_admin_kb(
+    user_id: int,
+    actor_id: int | None = None,
+    is_reserve: bool = False,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎯 Выбрать фракцию", callback_data=f"profile_choosefac:{user_id}")
+    # ✅ НОВОЕ: вывести из резерва (видно только модерам/админам и только если игрок в резерве)
+    if is_reserve and actor_id in (ADMIN_IDS | MODERATOR_IDS):
+        kb.button(text="🟢 Вывести из резерва", callback_data=f"reserve:out:{user_id}")
     kb.button(text="🗑 Удалить игрока", callback_data=f"remove:init:{user_id}")
     kb.row()
     kb.button(text="✏️ Редактировать", callback_data=f"edit:init:{user_id}")
@@ -1637,6 +1644,10 @@ def profile_admin_kb(user_id: int, actor_id: int | None = None) -> InlineKeyboar
         kb.button(text="⚖Изменить рейтинг", callback_data=f"elo:edit:{user_id}")
         kb.button(text="🧹 Очистить историю игрока", callback_data=f"hist:clear:{user_id}")
     return kb.adjust(1).as_markup()
+
+def is_reserve_faction(faction: str | None) -> bool:
+    v = (faction or "").strip().lower()
+    return v in {"резерв", "reserve"}
 
 
 
@@ -2152,7 +2163,12 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     # Базовые данные
     nickname = user.get("nickname") or "Без ника"
     clan_id = pad_clan_id(user.get("clan_id"))
-    faction = user.get("faction") or "—"
+    level = user.get("level")
+    try:
+        level = int(level)
+    except Exception:
+        level = 0
+    
     clan_title = user.get("clan_title") or "—"
     timezone_val = user.get("timezone") or "—"
     tg_id = user.get("user_id") or "-"
@@ -2253,7 +2269,7 @@ def generate_profile_card_image(user: dict, history: list | None = None, pos: in
     y += 60
     draw.text(
         (x, y),
-        f"Фракция: {faction}",
+        f"Уровень допуска: {level}",
         font=subtitle_font,
         fill=(220, 220, 220),
     )
@@ -3603,7 +3619,11 @@ async def cmd_player(message: Message, command: Command):
     # Затем — текстовую админ-карточку с кнопками (как и было)
     await message.answer(
         format_profile(target_user, history=history),
-        reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
+        reply_markup=profile_admin_kb(
+            target_user["user_id"],
+            actor_id=message.from_user.id,
+            is_reserve=is_reserve_faction(target_user.get("faction")),
+        ),
     )
 
     # История турниров и позиция по Elo
@@ -3695,6 +3715,49 @@ async def on_profile_refresh(call: CallbackQuery):
     except Exception:
         pass
     await call.answer("Профиль обновлён.")
+
+@dp.callback_query(F.data.startswith("reserve:out:"))
+async def on_reserve_out(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    try:
+        _, _, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    # обновляем игрока: фракция = Fresh Meat, reserve_until = NULL
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET faction=?, reserve_until=NULL WHERE user_id=?",
+            ("Fresh Meat", target_id),
+        )
+        await db.commit()
+
+    # лог действия (если у тебя есть log_mod_action — используем)
+    try:
+        await log_mod_action(call.from_user.id, "Вывод из резерва", target_id=target_id, extra="faction=Fresh Meat; reserve_until=NULL")
+    except Exception:
+        pass
+
+    # перерисовать карточку профиля (текстовую) с обновлёнными кнопками
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    await call.message.edit_text(
+        format_profile(user),
+        reply_markup=profile_admin_kb(
+            user["user_id"],
+            actor_id=call.from_user.id,
+            is_reserve=is_reserve_faction(user.get("faction")),
+        ),
+    )
+    await call.answer("Готово: игрок выведен из резерва.")
 
 @dp.callback_query(F.data.startswith("profile_choosefac:"))
 async def on_profile_choose_faction(call: CallbackQuery):
@@ -5409,14 +5472,13 @@ async def cmd_players(message: Message):
 
         cur = await db.execute(
             """
-            SELECT COALESCE(NULLIF(TRIM(faction), ''), '—') AS fac, COUNT(1) AS c
+            SELECT COUNT(1) AS c
             FROM users
             WHERE status = 'joined'
-            GROUP BY fac
-            ORDER BY c DESC, fac ASC
+              AND (LOWER(TRIM(faction)) = 'резерв' OR LOWER(TRIM(faction)) = 'reserve')
             """
         )
-        faction_rows = await cur.fetchall()
+        reserve_count = (await cur.fetchone())[0]
 
         # ---- НОВЫЙ БЛОК: агрегирование по званиям (clan_title) ----
         cur = await db.execute(
@@ -5472,11 +5534,11 @@ async def cmd_players(message: Message):
         csv_rows = await cur.fetchall()
         csv_cols = [d[0] for d in cur.description]
 
-    lines = [f"<b>Игроки клана (вступившие)</b>", f"Всего: <b>{total_joined}</b>"]
-    if faction_rows:
-        lines.append("По фракциям:")
-        for fac, c in faction_rows:
-            lines.append(f"• {fac}: {c}")
+    lines = [
+        "<b>Игроки клана (вступившие)</b>",
+        f"Всего: <b>{total_joined}</b>",
+        f"Резерв: <b>{reserve_count}</b>",
+    ]
 
     # ---- НОВЫЙ БЛОК: вывод по званиям ----
     if rank_rows:
