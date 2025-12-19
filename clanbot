@@ -4605,6 +4605,396 @@ def stats_kb() -> InlineKeyboardMarkup:
     kb.button(text="CSV (все за 30д)", callback_data="export:all:30d")
     return kb.adjust(1).as_markup()
 
+def period_stats_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="За год", callback_data="pstats:1y")
+    kb.button(text="За полгода", callback_data="pstats:6m")
+    kb.button(text="За квартал", callback_data="pstats:3m")
+    kb.button(text="За месяц", callback_data="pstats:1m")
+    kb.button(text="За неделю", callback_data="pstats:7d")
+    return kb.adjust(1).as_markup()
+
+def _pstats_bounds(key: str) -> tuple[datetime, datetime]:
+    end = datetime.utcnow()
+    if key == "1y":
+        start = end - timedelta(days=365)
+    elif key == "6m":
+        start = end - timedelta(days=183)
+    elif key == "3m":
+        start = end - timedelta(days=92)
+    elif key == "1m":
+        start = end - timedelta(days=31)
+    else:  # "7d"
+        start = end - timedelta(days=7)
+    return start, end
+
+@dp.callback_query(F.data.startswith("pstats:"))
+async def on_period_stats(call: CallbackQuery):
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Только модераторы/администраторы", show_alert=True)
+        return
+
+    key = call.data.split(":")[1]
+    start, end = _pstats_bounds(key)
+    text = await get_period_stats(start, end)
+    await call.message.edit_text(text, reply_markup=period_stats_kb())
+    await call.answer()
+
+async def get_period_stats(start: datetime, end: datetime) -> str:
+    """
+    Отчёт за период:
+    - вступившие
+    - удалённые из базы
+    - средняя посещаемость тренировок (без Резерва)
+    - количество КВ
+    - победы/поражения/винрейт
+    - самый активный игрок (тренировки + КВ регистрации)
+    - ТОП-5 "Да" (тренировки)
+    - ТОП-5 "Нет" (тренировки)
+    - ТОП-10 не отвечают + сумма "ненажатий"
+    """
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+
+    start_date = start.date().isoformat()
+    end_date = end.date().isoformat()
+
+    def _is_reserve(val: str | None) -> bool:
+        v = (val or "").strip().lower()
+        return v in {"резерв", "reserve"}
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # --- Вступившие ---
+        cur = await db.execute(
+            """
+            SELECT COUNT(1) AS c
+            FROM users
+            WHERE joined_at IS NOT NULL
+              AND datetime(joined_at) >= datetime(?)
+              AND datetime(joined_at) < datetime(?)
+            """,
+            (start_iso, end_iso),
+        )
+        joined_count = int((await cur.fetchone())["c"])
+
+        # --- Удалённые из базы (берём из mod_actions) ---
+        cur = await db.execute(
+            """
+            SELECT COUNT(1) AS c
+            FROM mod_actions
+            WHERE action = 'Удаление игрока из базы'
+              AND datetime(created_at) >= datetime(?)
+              AND datetime(created_at) < datetime(?)
+            """,
+            (start_iso, end_iso),
+        )
+        removed_count = int((await cur.fetchone())["c"])
+
+        # --- Тренировки: список дат в периоде ---
+        cur = await db.execute(
+            """
+            SELECT DISTINCT date
+            FROM training_attendance
+            WHERE date >= ? AND date <= ?
+            ORDER BY date
+            """,
+            (start_date, end_date),
+        )
+        training_dates = [r["date"] for r in await cur.fetchall()]
+        trainings_total = len(training_dates)
+
+        # --- Список активных игроков (joined, не резерв) ---
+        cur = await db.execute(
+            """
+            SELECT user_id, nickname, faction, joined_at
+            FROM users
+            WHERE status = 'joined'
+            """
+        )
+        users_rows = await cur.fetchall()
+
+        eligible_users = []
+        for r in users_rows:
+            if _is_reserve(r["faction"]):
+                continue
+            eligible_users.append(
+                {
+                    "user_id": int(r["user_id"]),
+                    "nickname": (r["nickname"] or f"ID {r['user_id']}").strip(),
+                    "joined_at": r["joined_at"],
+                }
+            )
+
+        # --- Средняя посещаемость тренировок (развернуто) ---
+        # считаем по каждому дню: yes/no/late/ответили/не ответили среди eligible
+        per_day = []
+        if trainings_total > 0 and eligible_users:
+            eligible_ids = [u["user_id"] for u in eligible_users]
+            # SQLite лимит на IN обычно ок для ваших размеров; если будет много — можно переписать через temp table
+            placeholders = ",".join("?" for _ in eligible_ids)
+
+            for d in training_dates:
+                cur = await db.execute(
+                    f"""
+                    SELECT response, COUNT(1) AS c
+                    FROM training_attendance
+                    WHERE date = ?
+                      AND user_id IN ({placeholders})
+                    GROUP BY response
+                    """,
+                    (d, *eligible_ids),
+                )
+                rows = await cur.fetchall()
+                by = {row["response"]: int(row["c"]) for row in rows}
+                yes = by.get("yes", 0)
+                no = by.get("no", 0)
+                late = by.get("late", 0)
+                responded = yes + no + late
+                eligible = len(eligible_ids)
+                no_answer = max(0, eligible - responded)
+                per_day.append(
+                    {"date": d, "yes": yes, "no": no, "late": late, "responded": responded, "eligible": eligible, "no_answer": no_answer}
+                )
+
+        def _avg(vals: list[int]) -> float:
+            return (sum(vals) / len(vals)) if vals else 0.0
+
+        avg_yes = _avg([x["yes"] for x in per_day])
+        avg_responded = _avg([x["responded"] for x in per_day])
+        avg_yes_pct = (avg_yes / per_day[0]["eligible"] * 100.0) if per_day and per_day[0]["eligible"] else 0.0
+        avg_resp_pct = (avg_responded / per_day[0]["eligible"] * 100.0) if per_day and per_day[0]["eligible"] else 0.0
+
+        # --- КВ за период ---
+        cur = await db.execute(
+            """
+            SELECT COUNT(1) AS c
+            FROM cw_wars
+            WHERE datetime(starts_at) >= datetime(?)
+              AND datetime(starts_at) < datetime(?)
+            """,
+            (start_iso, end_iso),
+        )
+        cw_count = int((await cur.fetchone())["c"])
+
+        cur = await db.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status='finished' AND winner='Blackberry' THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN status='finished' AND winner IS NOT NULL AND winner!='Blackberry' THEN 1 ELSE 0 END) AS losses
+            FROM cw_wars
+            WHERE datetime(starts_at) >= datetime(?)
+              AND datetime(starts_at) < datetime(?)
+            """,
+            (start_iso, end_iso),
+        )
+        row = await cur.fetchone()
+        cw_wins = int(row["wins"] or 0)
+        cw_losses = int(row["losses"] or 0)
+        cw_done = cw_wins + cw_losses
+        cw_winrate = (cw_wins / cw_done * 100.0) if cw_done else 0.0
+
+        # --- ТОП по тренировкам (Да/Нет) ---
+        # (по нажатию, только среди joined и не резерв)
+        top_yes = []
+        top_no = []
+        if trainings_total > 0 and eligible_users:
+            eligible_ids = [u["user_id"] for u in eligible_users]
+            placeholders = ",".join("?" for _ in eligible_ids)
+
+            cur = await db.execute(
+                f"""
+                SELECT u.user_id, COALESCE(u.nickname, '') AS nickname, COUNT(1) AS c
+                FROM training_attendance ta
+                JOIN users u ON u.user_id = ta.user_id
+                WHERE ta.date >= ? AND ta.date <= ?
+                  AND ta.response = 'yes'
+                  AND ta.user_id IN ({placeholders})
+                GROUP BY u.user_id
+                ORDER BY c DESC
+                LIMIT 5
+                """,
+                (start_date, end_date, *eligible_ids),
+            )
+            top_yes = [(r["nickname"] or f"ID {r['user_id']}", int(r["c"])) for r in await cur.fetchall()]
+
+            cur = await db.execute(
+                f"""
+                SELECT u.user_id, COALESCE(u.nickname, '') AS nickname, COUNT(1) AS c
+                FROM training_attendance ta
+                JOIN users u ON u.user_id = ta.user_id
+                WHERE ta.date >= ? AND ta.date <= ?
+                  AND ta.response = 'no'
+                  AND ta.user_id IN ({placeholders})
+                GROUP BY u.user_id
+                ORDER BY c DESC
+                LIMIT 5
+                """,
+                (start_date, end_date, *eligible_ids),
+            )
+            top_no = [(r["nickname"] or f"ID {r['user_id']}", int(r["c"])) for r in await cur.fetchall()]
+
+        # --- Самый активный игрок (тренировки yes + регистрации на КВ) ---
+        # тренировки yes
+        train_yes_map: dict[int, int] = {}
+        if trainings_total > 0:
+            cur = await db.execute(
+                """
+                SELECT user_id, COUNT(1) AS c
+                FROM training_attendance
+                WHERE date >= ? AND date <= ?
+                  AND response = 'yes'
+                GROUP BY user_id
+                """,
+                (start_date, end_date),
+            )
+            for r in await cur.fetchall():
+                train_yes_map[int(r["user_id"])] = int(r["c"])
+
+        # КВ регистрации
+        cw_reg_map: dict[int, int] = {}
+        cur = await db.execute(
+            """
+            SELECT cr.user_id, COUNT(1) AS c
+            FROM cw_registrations cr
+            JOIN cw_wars w ON w.id = cr.war_id
+            WHERE datetime(w.starts_at) >= datetime(?)
+              AND datetime(w.starts_at) < datetime(?)
+            GROUP BY cr.user_id
+            """,
+            (start_iso, end_iso),
+        )
+        for r in await cur.fetchall():
+            cw_reg_map[int(r["user_id"])] = int(r["c"])
+
+        most_active = None
+        for u in eligible_users:
+            uid = u["user_id"]
+            ty = train_yes_map.get(uid, 0)
+            cw = cw_reg_map.get(uid, 0)
+            score = ty + cw
+            if most_active is None:
+                most_active = (u["nickname"], ty, cw, score)
+            else:
+                # score desc, потом тренировочный вклад, потом КВ
+                if (score, ty, cw) > (most_active[3], most_active[1], most_active[2]):
+                    most_active = (u["nickname"], ty, cw, score)
+
+        # --- ТОП-10 "не отвечает" + сумма ненажатий ---
+        # считаем "ненажатия" корректнее: только начиная с даты вступления игрока (если joined_at есть)
+        non_answer_rank = []
+        total_non_clicks = 0
+
+        if trainings_total > 0 and eligible_users:
+            # заранее вытащим ответы за период по всем eligible одним запросом
+            eligible_ids = [u["user_id"] for u in eligible_users]
+            placeholders = ",".join("?" for _ in eligible_ids)
+            cur = await db.execute(
+                f"""
+                SELECT user_id, COUNT(1) AS c
+                FROM training_attendance
+                WHERE date >= ? AND date <= ?
+                  AND user_id IN ({placeholders})
+                GROUP BY user_id
+                """,
+                (start_date, end_date, *eligible_ids),
+            )
+            responded_map = {int(r["user_id"]): int(r["c"]) for r in await cur.fetchall()}
+
+            # список дат тренировок как date для сравнения
+            t_dates = [datetime.fromisoformat(d).date() for d in training_dates]
+            s_date = start.date()
+            e_date = end.date()
+
+            for u in eligible_users:
+                uid = u["user_id"]
+                j = u["joined_at"]
+                user_start = s_date
+                if j:
+                    try:
+                        user_join_date = datetime.fromisoformat(j).date()
+                        if user_join_date > user_start:
+                            user_start = user_join_date
+                    except Exception:
+                        pass
+
+                eligible_trainings = sum(1 for td in t_dates if user_start <= td <= e_date)
+                responded = responded_map.get(uid, 0)
+                non_clicks = max(0, eligible_trainings - responded)
+
+                total_non_clicks += non_clicks
+                non_answer_rank.append((u["nickname"], non_clicks))
+
+            non_answer_rank.sort(key=lambda x: x[1], reverse=True)
+            non_answer_rank = non_answer_rank[:10]
+
+    # ---- Формирование текста ----
+    title = f"Статистика за период: {start.date().isoformat()} → {end.date().isoformat()}"
+    lines = [f"<b>{title}</b>"]
+
+    lines.append("")
+    lines.append(f"👥 Вступившие: <b>{joined_count}</b>")
+    lines.append(f"🗑️ Удалённые из базы: <b>{removed_count}</b>")
+
+    lines.append("")
+    lines.append(f"🏋️ Тренировок в периоде: <b>{trainings_total}</b> (без Резерва)")
+    if trainings_total == 0:
+        lines.append("Нет тренировок/ответов за выбранный период.")
+    else:
+        lines.append(
+            f"Среднее за тренировку: "
+            f"✅ да <b>{avg_yes:.1f}</b> ({avg_yes_pct:.1f}%), "
+            f"📩 ответили <b>{avg_responded:.1f}</b> ({avg_resp_pct:.1f}%)"
+        )
+        if per_day:
+            # короткая “развернутая” строка итогов по суммам
+            total_yes = sum(x["yes"] for x in per_day)
+            total_no = sum(x["no"] for x in per_day)
+            total_late = sum(x["late"] for x in per_day)
+            total_no_answer = sum(x["no_answer"] for x in per_day)
+            lines.append(
+                f"Итого по всем тренировкам: ✅ {total_yes} | ❌ {total_no} | ⏰ {total_late} | 🙈 не ответили {total_no_answer}"
+            )
+
+    lines.append("")
+    lines.append(f"⚔️ КВ в периоде: <b>{cw_count}</b>")
+    lines.append(f"КВ (finished): Победы <b>{cw_wins}</b> / Поражения <b>{cw_losses}</b> / Винрейт <b>{cw_winrate:.1f}%</b>")
+
+    lines.append("")
+    if most_active:
+        n, ty, cw, score = most_active
+        lines.append(f"🔥 Самый активный игрок: <b>{n}</b> (тренировки Да: {ty}, КВ регистраций: {cw}, всего: {score})")
+    else:
+        lines.append("🔥 Самый активный игрок: нет данных")
+
+    lines.append("")
+    lines.append("🏆 ТОП-5 по посещению (нажали «Да»):")
+    if top_yes:
+        for i, (n, c) in enumerate(top_yes, 1):
+            lines.append(f"{i}. {n} — {c}")
+    else:
+        lines.append("—")
+
+    lines.append("")
+    lines.append("🚫 ТОП-5 по отказам (нажали «Нет»):")
+    if top_no:
+        for i, (n, c) in enumerate(top_no, 1):
+            lines.append(f"{i}. {n} — {c}")
+    else:
+        lines.append("—")
+
+    lines.append("")
+    lines.append("👻 ТОП-10 кто чаще не отвечает:")
+    if non_answer_rank:
+        for i, (n, c) in enumerate(non_answer_rank, 1):
+            lines.append(f"{i}. {n} — ненажатий: {c}")
+        lines.append(f"Суммарно ненажатий (ТОЛЬКО после вступления): <b>{total_non_clicks}</b>")
+    else:
+        lines.append("—")
+
+    return "\n".join(lines)
+
 @dp.message(F.text == "/stats")
 async def cmd_stats(message: Message):
     if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
@@ -7522,8 +7912,9 @@ class FindPlayerState(StatesGroup):
 def admin_menu_kb(is_admin: bool) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="Список игроков"), KeyboardButton(text="Статус посещения")],
-        [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Изменить контакты")],
-        [KeyboardButton(text="Изменить ивенты"), KeyboardButton(text="Найти игрока")],
+        [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Статистика за период")],
+        [KeyboardButton(text="Изменить контакты"), KeyboardButton(text="Изменить ивенты")],
+        [KeyboardButton(text="Найти игрока")],
         [KeyboardButton(text="Создать КВ"), KeyboardButton(text="КВ (админ)")],
         [KeyboardButton(text="Статистика КВ")],
     ]
@@ -7683,6 +8074,13 @@ async def on_label_stats(message: Message):
         await cmd_stats(fake)
     except Exception:
         await message.answer("/stats")
+
+@dp.message(F.text == "Статистика за период")
+async def on_label_period_stats(message: Message):
+    if message.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await message.answer("Только модераторы/администраторы.")
+        return
+    await message.answer("Выберите период:", reply_markup=period_stats_kb())
 
 @dp.message(F.text == "Изменить контакты")
 async def on_label_contacts(message: Message):
