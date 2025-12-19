@@ -7911,10 +7911,10 @@ class FindPlayerState(StatesGroup):
 
 def admin_menu_kb(is_admin: bool) -> ReplyKeyboardMarkup:
     keyboard = [
+        [KeyboardButton(text="Найти игрока")],
         [KeyboardButton(text="Список игроков"), KeyboardButton(text="Статус посещения")],
         [KeyboardButton(text="Статистика клана"), KeyboardButton(text="Статистика за период")],
         [KeyboardButton(text="Изменить контакты"), KeyboardButton(text="Изменить ивенты")],
-        [KeyboardButton(text="Найти игрока")],
         [KeyboardButton(text="Создать КВ"), KeyboardButton(text="КВ (админ)")],
         [KeyboardButton(text="Статистика КВ")],
     ]
