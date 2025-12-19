@@ -5475,10 +5475,13 @@ async def cmd_players(message: Message):
             SELECT COUNT(1) AS c
             FROM users
             WHERE status = 'joined'
-              AND (LOWER(TRIM(faction)) = 'резерв' OR LOWER(TRIM(faction)) = 'reserve')
+              AND (
+                  instr(lower(trim(faction)), 'резерв') > 0
+                  OR instr(lower(trim(faction)), 'reserve') > 0
+              )
             """
         )
-        reserve_count = (await cur.fetchone())[0]
+        reserve_count = int((await cur.fetchone())[0])
 
         # ---- НОВЫЙ БЛОК: агрегирование по званиям (clan_title) ----
         cur = await db.execute(
