@@ -1508,7 +1508,7 @@ async def on_hist_elo(message: Message, state: FSMContext):
     try:
         await message.answer(
             f"✅ Запись добавлена, ELO изменён на +{elo_delta}.",
-            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id),
+            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id, is_reserve=is_user_in_reserve(user)),
         )
         await message.answer(
             format_profile(user, history=await get_tournament_history(int(user.get("user_id"))))
@@ -1564,7 +1564,7 @@ async def on_elo_edit_value(message: Message, state: FSMContext):
             format_profile(updated_user, history=await get_tournament_history(int(updated_user.get("user_id")))),
             chat_id=panel_chat_id,
             message_id=panel_msg_id,
-            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id),
+            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id, is_reserve=is_user_in_reserve(updated_user)),
         )
     except Exception:
         # если не получилось — просто ничего не делаем
@@ -1580,9 +1580,9 @@ async def on_hist_clear(call: CallbackQuery):
     await clear_tournament_history(target_id)
     user = await get_user(target_id)
     try:
-        await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+        await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id), is_reserve=is_user_in_reserve(user))
     except Exception:
-        await call.message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+        await call.message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id), is_reserve=is_user_in_reserve(user))
     await call.answer("История очищена.")
 
 async def ensure_training_tables():
@@ -1647,7 +1647,14 @@ def profile_admin_kb(
 
 def is_reserve_faction(faction: str | None) -> bool:
     v = (faction or "").strip().lower()
-    return v in {"резерв", "reserve"}
+    # В базе может лежать: 'Резерв', 'reserve', а иногда и варианты вроде 'Резерв ...'
+    return ("резерв" in v) or ("reserve" in v)
+
+def is_user_in_reserve(user: dict | None) -> bool:
+    if not user:
+        return False
+    # Надёжный критерий: либо явно стоит reserve_until, либо фракция содержит 'резерв'
+    return (user.get("reserve_until") is not None) or is_reserve_faction(user.get("faction"))
 
 
 
@@ -3622,7 +3629,7 @@ async def cmd_player(message: Message, command: Command):
         reply_markup=profile_admin_kb(
             target_user["user_id"],
             actor_id=message.from_user.id,
-            is_reserve=is_reserve_faction(target_user.get("faction")),
+            is_reserve=is_user_in_reserve(target_user),
         ),
     )
 
@@ -3659,7 +3666,7 @@ async def cmd_player(message: Message, command: Command):
     # Текстовая админ-карточка остаётся как была
     await message.answer(
         format_profile(target_user, history=history),
-        reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
+        reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id, is_reserve=is_user_in_reserve(target_user)),
     )
 
 @dp.callback_query(F.data.startswith("career:user:"))
@@ -3711,7 +3718,7 @@ async def on_profile_refresh(call: CallbackQuery):
         await call.answer("Пользователь не найден.", show_alert=True)
         return
     try:
-        await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+        await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id), is_reserve=is_user_in_reserve(user))
     except Exception:
         pass
     await call.answer("Профиль обновлён.")
@@ -3754,7 +3761,7 @@ async def on_reserve_out(call: CallbackQuery):
         reply_markup=profile_admin_kb(
             user["user_id"],
             actor_id=call.from_user.id,
-            is_reserve=is_reserve_faction(user.get("faction")),
+            is_reserve=is_user_in_reserve(user),
         ),
     )
     await call.answer("Готово: игрок выведен из резерва.")
@@ -3821,7 +3828,7 @@ async def on_profile_back(call: CallbackQuery):
         await call.answer("Пользователь не найден.", show_alert=True)
         return
     try:
-        await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+        await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id), is_reserve=is_user_in_reserve(user))
     except Exception:
         pass
     await call.answer()
@@ -3847,7 +3854,7 @@ async def on_profile_set_faction(call: CallbackQuery, state: FSMContext):
         await send_faction_notice(target_id, title)
         user = await get_user(target_id)
         try:
-            await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id))
+            await call.message.edit_text(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id), is_reserve=is_user_in_reserve(user))
         except Exception:
             pass
         await call.answer(f"Фракция установлена: {title}")
@@ -4101,7 +4108,7 @@ async def on_rank_set(call: CallbackQuery):
                     user,
                     history=await get_tournament_history(int(user.get("user_id"))),
                 ),
-                reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id),
+                reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id, is_reserve=is_user_in_reserve(user)),
             )
         except Exception:
             try:
@@ -4110,7 +4117,7 @@ async def on_rank_set(call: CallbackQuery):
                         user,
                         history=await get_tournament_history(int(user.get("user_id"))),
                     ),
-                    reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id),
+                    reply_markup=profile_admin_kb(target_id, actor_id=call.from_user.id, is_reserve=is_user_in_reserve(user)),
                 )
             except Exception:
                 pass
@@ -4200,10 +4207,10 @@ async def on_edit_value(message: Message, state: FSMContext):
             chat_id=data.get("chat_id"),
             message_id=data.get("edit_message_id"),
             text=format_profile(user, history=await get_tournament_history(int(user.get("user_id")))),
-            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id)
+            reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id, is_reserve=is_user_in_reserve(user))
         )
     except Exception:
-        await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id))
+        await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id), is_reserve=is_user_in_reserve(user))
 
     # Log change
     try:
@@ -5476,7 +5483,8 @@ async def cmd_players(message: Message):
             FROM users
             WHERE status = 'joined'
               AND (
-                  instr(lower(trim(faction)), 'резерв') > 0
+                  reserve_until IS NOT NULL
+                  OR instr(lower(trim(faction)), 'резерв') > 0
                   OR instr(lower(trim(faction)), 'reserve') > 0
               )
             """
@@ -7028,12 +7036,12 @@ async def on_reserve_until_input(message: Message, state: FSMContext):
     panel_msg_id = data.get("panel_msg_id")
     try:
         if panel_chat_id and panel_msg_id:
-            await bot.edit_message_text(chat_id=panel_chat_id, message_id=panel_msg_id, text=format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id))
+            await bot.edit_message_text(chat_id=panel_chat_id, message_id=panel_msg_id, text=format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id), is_reserve=is_user_in_reserve(user))
         else:
-            await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id))
+            await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id), is_reserve=is_user_in_reserve(user))
     except Exception:
         try:
-            await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id))
+            await message.answer(format_profile(user, history=await get_tournament_history(int(user.get("user_id")))), reply_markup=profile_admin_kb(target_id, actor_id=message.from_user.id), is_reserve=is_user_in_reserve(user))
         except Exception:
             pass
     await message.answer("✅ Перевод в резерв сохранён.")
@@ -8286,7 +8294,7 @@ async def find_player_query(message: Message, state: FSMContext):
     # Один текстовый профиль с кнопками (без дублей)
     await message.answer(
         format_profile(target_user, history=history, pos=pos),
-        reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id),
+        reply_markup=profile_admin_kb(target_user["user_id"], actor_id=message.from_user.id, is_reserve=is_user_in_reserve(target_user)),
     )
 
     await state.clear()
@@ -8323,4 +8331,3 @@ def new_users_kb(rows) -> InlineKeyboardMarkup:
     for uid, clan_id, nickname, created_at in rows:
         kb.button(text=f"🗑 Удалить {nickname or uid}", callback_data=f"newdel:{uid}")
     return kb.adjust(1).as_markup()
-
