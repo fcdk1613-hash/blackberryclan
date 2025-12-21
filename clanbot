@@ -6993,9 +6993,7 @@ async def on_reserve_req_reject(call: CallbackQuery):
         user = await get_user(target_id)
         disp = display_name(user) if user else str(target_id)
         await call.message.edit_text(
-            f"❌ Запрос в резерв отклонён.\n
-Игрок: {disp}\n
-Решение: отклонено модератором.",
+            f"❌ Запрос в резерв отклонён. Игрок: {disp}.Решение: отклонено модератором.",
             reply_markup=None
         )
     except Exception:
