@@ -6927,6 +6927,85 @@ def reserve_request_kb(target_user_id: int) -> InlineKeyboardMarkup:
     kb.button(text="❌ Отклонить", callback_data=f"reserve_req:reject:{target_user_id}")
     return kb.adjust(1).as_markup()
 
+
+@dp.callback_query(F.data.startswith("reserve_req:approve:"))
+async def on_reserve_req_approve(call: CallbackQuery, state: FSMContext):
+    # Только модераторы/админы
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    try:
+        _, action, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    user = await get_user(target_id)
+    if not user:
+        await call.answer("Пользователь не найден.", show_alert=True)
+        return
+
+    # Блокируем повторные нажатия (снимаем кнопки)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Сохраняем контекст уведомления, чтобы после ввода даты обновить это же сообщение
+    await state.update_data(
+        reserve_user_id=target_id,
+        notify_chat_id=call.message.chat.id,
+        notify_msg_id=call.message.message_id,
+        notify_moderator_id=call.from_user.id,
+    )
+
+    await call.message.answer(
+        f"Введите дату, до которой игрок будет в резерве (ДД.ММ.ГГГГ), например 25.12.2025:"
+    )
+    await state.set_state(ReserveUntilState.waiting_date)
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("reserve_req:reject:"))
+async def on_reserve_req_reject(call: CallbackQuery):
+    # Только модераторы/админы
+    if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
+        await call.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    try:
+        _, action, uid_str = call.data.split(":")
+        target_id = int(uid_str)
+    except Exception:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+
+    # Сообщаем игроку
+    try:
+        await bot.send_message(target_id, "Запрос на перевод в резерв отклонен. Свяжитесь с HR.")
+    except Exception:
+        pass
+
+    # Обновляем сообщение модератору
+    try:
+        user = await get_user(target_id)
+        disp = display_name(user) if user else str(target_id)
+        await call.message.edit_text(
+            f"❌ Запрос в резерв отклонён.
+Игрок: {disp}
+Решение: отклонено модератором.",
+            reply_markup=None
+        )
+    except Exception:
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    await call.answer("Отклонено.")
+
 @dp.callback_query(F.data == "menu:reserve")
 async def on_menu_reserve(call: CallbackQuery, state: FSMContext):
     uid = call.from_user.id
@@ -7004,6 +7083,35 @@ async def on_reserve_until_input(message: Message, state: FSMContext):
         await bot.send_message(target_id, f"Ты переведён в резерв клана до {raw}. Возвращайся как можно скорее! Для этого ты можешь написать любому из HR.")
     except Exception:
         pass
+
+    # Если перевод в резерв был подтверждён через inline-кнопки из уведомления модератору —
+    # обновим то уведомление и не будем пытаться "обновлять карточку профиля" в том же сообщении.
+    notify_chat_id = data.get("notify_chat_id")
+    notify_msg_id = data.get("notify_msg_id")
+    notify_moderator_id = data.get("notify_moderator_id")
+    if notify_chat_id and notify_msg_id:
+        user_now = await get_user(target_id)
+        try:
+            disp = display_name(user_now) if user_now else str(target_id)
+        except Exception:
+            disp = str(target_id)
+        try:
+            mod_tag = message.from_user.full_name or str(message.from_user.id)
+        except Exception:
+            mod_tag = str(message.from_user.id)
+        try:
+            await bot.edit_message_text(
+                chat_id=notify_chat_id,
+                message_id=notify_msg_id,
+                text=f"✅ Переведён в резерв\nИгрок: {disp}\nДо: {dt.strftime('%d.%m.%Y')}\nМодератор: {mod_tag}",
+                reply_markup=None
+            )
+        except Exception:
+            pass
+        await message.answer("✅ Перевод в резерв сохранён.")
+        await state.clear()
+        return
+
     # Обновляем карточку
     user = await get_user(target_id)
     panel_chat_id = data.get("panel_chat_id")
