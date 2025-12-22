@@ -50,7 +50,7 @@ CLAN_CHAT_ID = -1002482539490                   # -100...
 MODERATION_CHAT_ID = 0             # optional: join notifications
 
 ADMIN_IDS = {403704696, 1806167653, 95472883, 6931795405}                 # {111, 222}
-MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 1919395404, 924791806, 801573848}              # {333}
+MODERATOR_IDS = {5065520697, 850675380, 1268697850, 5662345281, 1919395404}              # {333}
 
 DB_PATH = "blackberry_bot.db"
 
@@ -1259,6 +1259,31 @@ async def init_db():
             except Exception:
                 # колонка уже есть – просто игнорируем
                 pass
+
+        # reserve requests (to update messages for all moderators consistently)
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS reserve_requests(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                reason TEXT,
+                approx_return TEXT,
+                status TEXT NOT NULL DEFAULT 'pending', -- pending|processing|approved|rejected
+                created_at TEXT,
+                processing_by INTEGER,
+                decided_by INTEGER,
+                decided_at TEXT,
+                decision_text TEXT
+            )"""
+        )
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS reserve_request_messages(
+                request_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                PRIMARY KEY(request_id, chat_id, message_id)
+            )"""
+        )
+
         await db.commit()
     await ensure_clan_ids()
 
@@ -3246,23 +3271,98 @@ async def notify_review_outcome(user_id: int, outcome: str):
             pass
 
 async def send_to_moderation(text: str, reply_markup: Optional[InlineKeyboardMarkup] = None):
+    """Send a message to moderation chat (if configured) and return the sent Message."""
     if MODERATION_CHAT_ID:
         try:
-            await bot.send_message(MODERATION_CHAT_ID, text, reply_markup=reply_markup)
+            return await bot.send_message(MODERATION_CHAT_ID, text, reply_markup=reply_markup)
         except Exception:
-            pass
+            return None
+    return None
 async def notify_staff(text: str, reply_markup: Optional[InlineKeyboardMarkup] = None):
-    """Отправляет уведомление в мод-чат (если задан) и в ЛС всем модерам/админам."""
+    """Отправляет уведомление в мод-чат (если задан) и в ЛС всем модерам/админам.
+
+    Возвращает список пар (chat_id, message_id) всех успешно отправленных сообщений,
+    чтобы потом можно было обновить/снять кнопки у всех модераторов.
+    """
+    sent: list[tuple[int, int]] = []
+
     try:
-        await send_to_moderation(text, reply_markup=reply_markup)
+        m = await send_to_moderation(text, reply_markup=reply_markup)
+        if m:
+            sent.append((m.chat.id, m.message_id))
     except Exception:
         pass
-    # Также отправляем в ЛС всем администраторам и модераторам
+
     for rid in reviewer_ids():
         try:
-            await bot.send_message(rid, text, reply_markup=reply_markup)
+            m = await bot.send_message(rid, text, reply_markup=reply_markup)
+            sent.append((m.chat.id, m.message_id))
         except Exception:
             pass
+
+    return sent
+
+
+# ===== Reserve request helpers (DB) =====
+async def create_reserve_request(user_id: int, reason: str, approx_return: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO reserve_requests(user_id, reason, approx_return, status, created_at) VALUES (?,?,?,?,?)",
+            (int(user_id), reason or "", approx_return or "", "pending", datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+async def add_reserve_request_messages(request_id: int, sent: list[tuple[int, int]]):
+    if not sent:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        for chat_id, message_id in sent:
+            await db.execute(
+                "INSERT OR IGNORE INTO reserve_request_messages(request_id, chat_id, message_id) VALUES (?,?,?)",
+                (int(request_id), int(chat_id), int(message_id)),
+            )
+        await db.commit()
+
+async def get_reserve_request(request_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, user_id, reason, approx_return, status, processing_by, decided_by, decided_at FROM reserve_requests WHERE id=?",
+            (int(request_id),),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        keys = ["id","user_id","reason","approx_return","status","processing_by","decided_by","decided_at"]
+        return dict(zip(keys, row))
+
+async def list_reserve_request_messages(request_id: int) -> list[tuple[int, int]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT chat_id, message_id FROM reserve_request_messages WHERE request_id=?",
+            (int(request_id),),
+        )
+        rows = await cur.fetchall()
+        return [(int(r[0]), int(r[1])) for r in rows]
+
+async def try_set_reserve_request_processing(request_id: int, moderator_id: int) -> bool:
+    """Atomically move pending->processing. Return True if you won the lock."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE reserve_requests SET status='processing', processing_by=? WHERE id=? AND status='pending'",
+            (int(moderator_id), int(request_id)),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+
+async def finalize_reserve_request(request_id: int, status: str, moderator_id: int, decision_text: str | None = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE reserve_requests SET status=?, decided_by=?, decided_at=?, decision_text=? WHERE id=?",
+            (status, int(moderator_id), datetime.utcnow().isoformat(), decision_text or "", int(request_id)),
+        )
+        await db.commit()
+
 
 async def create_invite_link() -> Optional[ChatInviteLink]:
     try:
@@ -6921,10 +7021,10 @@ async def on_menu_change_attendance(call: CallbackQuery):
 
 
 
-def reserve_request_kb(target_user_id: int) -> InlineKeyboardMarkup:
+def reserve_request_kb(request_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Перевести в резерв", callback_data=f"reserve_req:approve:{target_user_id}")
-    kb.button(text="❌ Отклонить", callback_data=f"reserve_req:reject:{target_user_id}")
+    kb.button(text="✅ Перевести в резерв", callback_data=f"reserve_req:approve:{request_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"reserve_req:reject:{request_id}")
     return kb.adjust(1).as_markup()
 
 
@@ -6936,37 +7036,53 @@ async def on_reserve_req_approve(call: CallbackQuery, state: FSMContext):
         return
 
     try:
-        _, action, uid_str = call.data.split(":")
-        target_id = int(uid_str)
+        _, _, rid_str = call.data.split(":")
+        request_id = int(rid_str)
     except Exception:
         await call.answer("Некорректные данные.", show_alert=True)
         return
+
+    req = await get_reserve_request(request_id)
+    if not req:
+        await call.answer("Заявка не найдена.", show_alert=True)
+        return
+
+    # Пытаемся "захватить" заявку (pending -> processing)
+    locked = await try_set_reserve_request_processing(request_id, call.from_user.id)
+    if not locked:
+        await call.answer("Эта заявка уже обрабатывается/обработана другим модератором.", show_alert=True)
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    target_id = int(req["user_id"])
 
     user = await get_user(target_id)
     if not user:
         await call.answer("Пользователь не найден.", show_alert=True)
         return
 
-    # Блокируем повторные нажатия (снимаем кнопки)
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    # Снимаем кнопки у ВСЕХ модераторов, чтобы не было дубликатов кликов
+    msgs = await list_reserve_request_messages(request_id)
+    for chat_id, msg_id in msgs:
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+        except Exception:
+            pass
 
-    # Сохраняем контекст уведомления, чтобы после ввода даты обновить это же сообщение
+    # Сохраняем контекст заявки, чтобы после ввода даты обновить все уведомления
     await state.update_data(
         reserve_user_id=target_id,
-        notify_chat_id=call.message.chat.id,
-        notify_msg_id=call.message.message_id,
+        reserve_request_id=request_id,
+        reserve_notify_messages=msgs,
         notify_moderator_id=call.from_user.id,
     )
 
-    await call.message.answer(
-        f"Введите дату, до которой игрок будет в резерве (ДД.ММ.ГГГГ), например 25.12.2025:"
-    )
+    await call.message.answer("Введите дату, до которой игрок будет в резерве (ДД.ММ.ГГГГ), например 25.12.2025:")
     await state.set_state(ReserveUntilState.waiting_date)
     await call.answer()
-
 
 @dp.callback_query(F.data.startswith("reserve_req:reject:"))
 async def on_reserve_req_reject(call: CallbackQuery):
@@ -6976,11 +7092,30 @@ async def on_reserve_req_reject(call: CallbackQuery):
         return
 
     try:
-        _, action, uid_str = call.data.split(":")
-        target_id = int(uid_str)
+        _, action, rid_str = call.data.split(":")
+        request_id = int(rid_str)
     except Exception:
         await call.answer("Некорректные данные.", show_alert=True)
         return
+
+    req = await get_reserve_request(request_id)
+    if not req:
+        await call.answer("Заявка не найдена.", show_alert=True)
+        return
+
+    # Если заявка ещё pending — сразу отклоняем. Если processing/approved/rejected — сообщаем.
+    if req["status"] != "pending":
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("Эта заявка уже обрабатывается/обработана.", show_alert=True)
+        return
+
+    target_id = int(req["user_id"])
+
+    # Финализируем в БД
+    await finalize_reserve_request(request_id, "rejected", call.from_user.id, "отклонено модератором")
 
     # Сообщаем игроку
     try:
@@ -6988,19 +7123,23 @@ async def on_reserve_req_reject(call: CallbackQuery):
     except Exception:
         pass
 
-    # Обновляем сообщение модератору
-    try:
-        user = await get_user(target_id)
-        disp = display_name(user) if user else str(target_id)
-        await call.message.edit_text(
-            f"❌ Запрос в резерв отклонён. Игрок: {disp}.Решение: отклонено модератором.",
-            reply_markup=None
-        )
-    except Exception:
+    # Обновляем ВСЕ сообщения у модераторов (текст + снимаем кнопки)
+    msgs = await list_reserve_request_messages(request_id)
+    user = await get_user(target_id)
+    disp = display_name(user) if user else str(target_id)
+    new_text = (
+        "❌ Запрос в резерв отклонён.\n"
+        f"Игрок: {disp}\n"
+        f"Решение: отклонено модератором (@{call.from_user.username or call.from_user.id})."
+    )
+    for chat_id, msg_id in msgs:
         try:
-            await call.message.edit_reply_markup(reply_markup=None)
+            await bot.edit_message_text(new_text, chat_id=chat_id, message_id=msg_id, reply_markup=None)
         except Exception:
-            pass
+            try:
+                await bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+            except Exception:
+                pass
 
     await call.answer("Отклонено.")
 
@@ -7082,12 +7221,12 @@ async def on_reserve_until_input(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    # Если перевод в резерв был подтверждён через inline-кнопки из уведомления модератору —
-    # обновим то уведомление и не будем пытаться "обновлять карточку профиля" в том же сообщении.
-    notify_chat_id = data.get("notify_chat_id")
-    notify_msg_id = data.get("notify_msg_id")
-    notify_moderator_id = data.get("notify_moderator_id")
-    if notify_chat_id and notify_msg_id:
+
+    request_id = data.get("reserve_request_id")
+    notify_msgs = data.get("reserve_notify_messages") or []
+    if request_id:
+        # Финализируем заявку и обновляем все уведомления у модераторов
+        await finalize_reserve_request(int(request_id), "approved", int(message.from_user.id), f"approved until {dt.isoformat()}")
         user_now = await get_user(target_id)
         try:
             disp = display_name(user_now) if user_now else str(target_id)
@@ -7097,18 +7236,22 @@ async def on_reserve_until_input(message: Message, state: FSMContext):
             mod_tag = message.from_user.full_name or str(message.from_user.id)
         except Exception:
             mod_tag = str(message.from_user.id)
-        try:
-            await bot.edit_message_text(
-                chat_id=notify_chat_id,
-                message_id=notify_msg_id,
-                text=f"✅ Переведён в резерв\nИгрок: {disp}\nДо: {dt.strftime('%d.%m.%Y')}\nМодератор: {mod_tag}",
-                reply_markup=None
-            )
-        except Exception:
-            pass
+
+        new_text = f'✅ Переведён в резерв\nИгрок: {disp}\nДо: {dt.strftime("%d.%m.%Y")}\nМодератор: {mod_tag}'
+        for chat_id, msg_id in notify_msgs:
+            try:
+                await bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=new_text, reply_markup=None)
+            except Exception:
+                try:
+                    await bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+                except Exception:
+                    pass
+
         await message.answer("✅ Перевод в резерв сохранён.")
         await state.clear()
         return
+
+
 
     # Обновляем карточку
     user = await get_user(target_id)
