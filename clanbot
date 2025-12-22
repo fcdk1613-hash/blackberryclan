@@ -1284,6 +1284,27 @@ async def init_db():
             )"""
         )
 
+        # join applications (to update messages for all moderators consistently)
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS application_requests(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending', -- pending|processing|approved|rejected
+                created_at TEXT,
+                processing_by INTEGER,
+                decided_by INTEGER,
+                decided_at TEXT
+            )"""
+        )
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS application_request_messages(
+                request_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                PRIMARY KEY(request_id, chat_id, message_id)
+            )"""
+        )
+
         await db.commit()
     await ensure_clan_ids()
 
@@ -1809,10 +1830,14 @@ def roles_choose_kb(user_id: int, opened: set[str], current_role: str | None) ->
     kb.button(text="⬅️ Назад", callback_data=f"profile_back:{user_id}")
     return kb.adjust(1).as_markup()
 
-def approve_kb(user_id: int) -> InlineKeyboardMarkup:
+def approve_kb(request_id: int) -> InlineKeyboardMarkup:
+    """Inline-кнопки для модераторов по заявке на вступление.
+
+    Важно: request_id — это ID записи в таблице application_requests.
+    """
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять", callback_data=f"approve:{user_id}")
-    kb.button(text="❌ Отклонить", callback_data=f"reject:{user_id}")
+    kb.button(text="✅ Принять", callback_data=f"app_req:approve:{request_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"app_req:reject:{request_id}")
     return kb.adjust(1).as_markup()
 
 def edit_menu_kb(user_id: int) -> InlineKeyboardMarkup:
@@ -3255,20 +3280,12 @@ async def is_subscribed(user_id: int) -> bool:
 def reviewer_ids() -> List[int]:
     return sorted(set(ADMIN_IDS) | set(MODERATOR_IDS))
 
-async def send_application_to_all(text: str, user_id: int):
-    for rid in reviewer_ids():
-        try:
-            await bot.send_message(rid, text, reply_markup=approve_kb(user_id))
-        except Exception as e:
-            logging.warning("Cannot DM reviewer %s: %r", rid, e)
+async def send_application_to_all(text: str, request_id: int) -> list[tuple[int, int]]:
+    """Отправляет заявку на вступление всем модерам/админам + в мод-чат (если задан).
 
-async def notify_review_outcome(user_id: int, outcome: str):
-    label = "✅ Одобрено" if outcome == "approved" else "❌ Отклонено"
-    for rid in reviewer_ids():
-        try:
-            await bot.send_message(rid, f"{label}: заявка пользователя <code>{user_id}</code> уже обработана.")
-        except Exception:
-            pass
+    Возвращает список (chat_id, message_id) для последующего массового обновления.
+    """
+    return await notify_staff(text, reply_markup=approve_kb(request_id))
 
 async def send_to_moderation(text: str, reply_markup: Optional[InlineKeyboardMarkup] = None):
     """Send a message to moderation chat (if configured) and return the sent Message."""
@@ -3360,6 +3377,72 @@ async def finalize_reserve_request(request_id: int, status: str, moderator_id: i
         await db.execute(
             "UPDATE reserve_requests SET status=?, decided_by=?, decided_at=?, decision_text=? WHERE id=?",
             (status, int(moderator_id), datetime.utcnow().isoformat(), decision_text or "", int(request_id)),
+        )
+        await db.commit()
+
+
+# ===== Join application helpers (DB) =====
+async def create_application_request(user_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO application_requests(user_id, status, created_at) VALUES (?,?,?)",
+            (int(user_id), "pending", datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def add_application_request_messages(request_id: int, sent: list[tuple[int, int]]):
+    if not sent:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        for chat_id, message_id in sent:
+            await db.execute(
+                "INSERT OR IGNORE INTO application_request_messages(request_id, chat_id, message_id) VALUES (?,?,?)",
+                (int(request_id), int(chat_id), int(message_id)),
+            )
+        await db.commit()
+
+
+async def get_application_request(request_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, user_id, status, processing_by, decided_by, decided_at FROM application_requests WHERE id=?",
+            (int(request_id),),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        keys = ["id", "user_id", "status", "processing_by", "decided_by", "decided_at"]
+        return dict(zip(keys, row))
+
+
+async def list_application_request_messages(request_id: int) -> list[tuple[int, int]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT chat_id, message_id FROM application_request_messages WHERE request_id=?",
+            (int(request_id),),
+        )
+        rows = await cur.fetchall()
+        return [(int(r[0]), int(r[1])) for r in rows]
+
+
+async def try_set_application_request_processing(request_id: int, moderator_id: int) -> bool:
+    """Atomically move pending->processing. Return True if you won the lock."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE application_requests SET status='processing', processing_by=? WHERE id=? AND status='pending'",
+            (int(moderator_id), int(request_id)),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def finalize_application_request(request_id: int, status: str, moderator_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE application_requests SET status=?, decided_by=?, decided_at=? WHERE id=?",
+            (status, int(moderator_id), datetime.utcnow().isoformat(), int(request_id)),
         )
         await db.commit()
 
@@ -3650,7 +3733,11 @@ async def on_send_apply(call: CallbackQuery):
         f"Личный TG: {user.get('tg_link')}\n"
         f"Фракция: {user.get('faction') or '— (выберите в профиле игрока)'}\n"
     )
-    await send_application_to_all(text, uid)
+    # Создаём заявку (чтобы потом массово обновлять сообщения всем модераторам)
+    request_id = await create_application_request(uid)
+    sent_msgs = await send_application_to_all(text, request_id)
+    await add_application_request_messages(request_id, sent_msgs)
+
     await call.message.edit_text("Заявка отправлена администраторам и модераторам. Ожидайте решения.")
 
 # ======= Moderation/Profile flow =======
@@ -4417,14 +4504,33 @@ async def on_remove_discdone(call: CallbackQuery):
         pass
     await call.answer("Отмечено как выполнено (Discord).")
 
-# ======= Approve/Reject (DM) =======
-@dp.callback_query(F.data.startswith("approve:"))
+# ======= Approve/Reject join application (inline) =======
+@dp.callback_query(F.data.startswith("app_req:approve:"))
 async def on_approve(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Только модераторы/администраторы могут одобрять заявки.", show_alert=True)
         return
 
-    target_id = int(call.data.split(":")[1])
+    request_id = int(call.data.split(":")[-1])
+    req = await get_application_request(request_id)
+    if not req:
+        await call.answer("Заявка не найдена.", show_alert=True)
+        return
+
+    # пытаемся залочить заявку, чтобы два модератора не приняли одновременно
+    if req.get("status") != "pending":
+        # уже в обработке/решена — просто снимем кнопки на этом сообщении
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("Заявка уже обработана.", show_alert=True)
+        return
+    if not await try_set_application_request_processing(request_id, call.from_user.id):
+        await call.answer("Заявка уже обрабатывается другим модератором.", show_alert=True)
+        return
+
+    target_id = int(req["user_id"])
     user = await get_user(target_id)
     if not user:
         await call.answer("Пользователь не найден", show_alert=True)
@@ -4452,12 +4558,22 @@ async def on_approve(call: CallbackQuery):
         f"Ваша заявка одобрена!\nФракция: {faction}\nСсылка для вступления в чат клана: {link.invite_link}",
     )
 
-    try:
-        await call.message.edit_text(call.message.text + "\n\n✅ Одобрено")
-    except Exception:
-        pass
+    # финализируем заявку и обновляем все сообщения у всех модераторов
+    await finalize_application_request(request_id, "approved", call.from_user.id)
+    msgs = await list_application_request_messages(request_id)
+    for chat_id, message_id in msgs:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=call.message.text + "\n\n✅ Одобрено",
+                reply_markup=None,
+            )
+        except Exception:
+            # сообщение могло быть удалено/нельзя редактировать — игнорируем
+            pass
+
     await call.answer("Одобрено ✅")
-    await notify_review_outcome(target_id, "approved")
     await log_mod_action(call.from_user.id, "Одобрена заявка", target_id=target_id)
     # Дополнительно: инструкции по тэгу и тренировочным серверам
     await bot.send_message(
@@ -4474,13 +4590,30 @@ async def on_approve(call: CallbackQuery):
         "Дневник Blackberry: https://t.me/+QZJOj-3aiXowYjEy\n"
     )
 
-@dp.callback_query(F.data.startswith("reject:"))
+@dp.callback_query(F.data.startswith("app_req:reject:"))
 async def on_reject(call: CallbackQuery):
     if call.from_user.id not in (ADMIN_IDS | MODERATOR_IDS):
         await call.answer("Только модераторы/администраторы могут отклонять заявки.", show_alert=True)
         return
 
-    target_id = int(call.data.split(":")[1])
+    request_id = int(call.data.split(":")[-1])
+    req = await get_application_request(request_id)
+    if not req:
+        await call.answer("Заявка не найдена.", show_alert=True)
+        return
+
+    if req.get("status") != "pending":
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("Заявка уже обработана.", show_alert=True)
+        return
+    if not await try_set_application_request_processing(request_id, call.from_user.id):
+        await call.answer("Заявка уже обрабатывается другим модератором.", show_alert=True)
+        return
+
+    target_id = int(req["user_id"])
     user = await get_user(target_id)
     if not user:
         await call.answer("Пользователь не найден", show_alert=True)
@@ -4496,12 +4629,20 @@ async def on_reject(call: CallbackQuery):
     await upsert_user(target_id, status=Status.REJECTED.value)
     await bot.send_message(target_id, "К сожалению, ваша заявка отклонена. Вы можете попробовать позже.")
 
-    try:
-        await call.message.edit_text(call.message.text + "\n\n❌ Отклонено")
-    except Exception:
-        pass
+    await finalize_application_request(request_id, "rejected", call.from_user.id)
+    msgs = await list_application_request_messages(request_id)
+    for chat_id, message_id in msgs:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=call.message.text + "\n\n❌ Отклонено",
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+
     await call.answer("Отклонено ❌")
-    await notify_review_outcome(target_id, "rejected")
     await log_mod_action(call.from_user.id, "Отклонена заявка", target_id=target_id)
 
 # ======= Profile & Join Announce =======
