@@ -7185,16 +7185,30 @@ async def on_reserve_request_date(message: Message, state: FSMContext):
     if not disp:
         disp = message.from_user.full_name or (("@" + message.from_user.username) if message.from_user.username else str(user_id))
     text = f'Игрок "{disp}" хочет перейти в резерв. Причина: "{reason}" Приблизительная дата выхода: "{date_text}"'
-    kb = reserve_request_kb(int(user_id))
+
+    # Создаём заявку в БД и рассылаем модераторам уведомления с request_id в callback_data
+    request_id = await create_reserve_request(int(user_id), reason, date_text)
+    kb = reserve_request_kb(request_id)
+
+    sent_msgs: list[tuple[int, int]] = []
     try:
-        await notify_staff(text, reply_markup=kb)
+        sent_msgs = await notify_staff(text, reply_markup=kb)
     except Exception:
         # fallback (на всякий случай)
         for rid in reviewer_ids():
             try:
-                await bot.send_message(rid, text, reply_markup=kb)
+                m = await bot.send_message(rid, text, reply_markup=kb)
+                sent_msgs.append((m.chat.id, m.message_id))
             except Exception:
                 pass
+
+    # Сохраняем все сообщения, чтобы потом можно было снять кнопки/обновить текст у всех модераторов
+    if sent_msgs:
+        try:
+            await add_reserve_request_messages(request_id, sent_msgs)
+        except Exception:
+            pass
+
     await message.answer("Заявка отправлена в HR. Ожидайте уведомления.")
     await state.clear()
 
